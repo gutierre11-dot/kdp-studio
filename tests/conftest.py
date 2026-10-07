@@ -110,6 +110,24 @@ def settings():
 
 
 @pytest.fixture
+def client(tmp_path, monkeypatch, settings):
+    """Cliente FastAPI com output/ e JobStore isolados por teste."""
+    from fastapi.testclient import TestClient
+
+    from backend.app import main
+    from backend.app.jobs import JobStore
+
+    monkeypatch.setattr(main, "store", JobStore(settings(output_dir=tmp_path)))
+    with TestClient(main.app) as c:
+        yield c
+
+
+@pytest.fixture
+def pdf_bytes(make_pdf):
+    return make_pdf(PAGES_3).read_bytes()
+
+
+@pytest.fixture
 def make_bookmark_pdf(tmp_path):
     """PDF de 2 páginas cujos títulos têm bookmarks correspondentes."""
     import pymupdf
