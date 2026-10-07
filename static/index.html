@@ -3,12 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KDP Studio — Converta, Traduza e Crie eBooks Premium</title>
-<meta name="description" content="KDP Studio: converta PDFs para KDP, traduza obras e crie eBooks com IA. Exporte EPUB e DOCX prontos para a Amazon.">
-<!-- Tailwind servido LOCALMENTE (static/vendor/tailwind.js).
-     Nao use CDN com integrity/crossorigin: cdn.tailwindcss.com nao envia
-     Access-Control-Allow-Origin, o navegador bloqueia o script e a interface
-     fica sem estilo. O arquivo local tambem funciona offline. -->
+<title>KDP Studio — PDF para EPUB no padrão KDP</title>
+<meta name="description" content="Converta PDF em EPUB no padrão KDP e traduza obras inteiras para português brasileiro.">
+<!-- Tailwind servido LOCALMENTE (static/vendor/tailwind.js): sem CDN, sem CORS e funciona offline. -->
 <script src="vendor/tailwind.js"></script>
 <script>
 tailwind.config = {
@@ -35,445 +32,174 @@ tailwind.config = {
 
 <!-- HEADER -->
 <header class="sticky top-0 z-40 glass-strong border-b border-white/10">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-3">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-3">
     <div class="flex items-center gap-3 shrink-0">
       <div class="w-10 h-10 rounded-2xl grid place-items-center text-2xl shadow-lg" style="background:linear-gradient(135deg,#6366f1,#a855f7 60%,#f59e0b);box-shadow:0 10px 30px -8px rgba(139,92,246,.7)">📚</div>
       <div>
         <p class="font-extrabold tracking-tight leading-none text-lg">KDP <span class="gradient-text">Studio</span></p>
-        <p class="text-[11px] text-slate-400 hidden sm:block">Do manuscrito ao best-seller</p>
+        <p class="text-[11px] text-slate-400 hidden sm:block">PDF → EPUB no padrão Amazon KDP</p>
       </div>
     </div>
-    <nav class="flex-1 flex gap-2 ml-2 sm:ml-6 overflow-x-auto pb-1" role="tablist" aria-label="Navegação principal">
-      <button data-tab="converter" role="tab" class="tab-btn active whitespace-nowrap px-3 sm:px-4 py-2 rounded-xl text-sm font-semibold border border-transparent text-slate-300 hover:text-white">📄 Converter</button>
-      <button data-tab="translate" role="tab" class="tab-btn whitespace-nowrap px-3 sm:px-4 py-2 rounded-xl text-sm font-semibold border border-transparent text-slate-300 hover:text-white">🌍 Traduzir</button>
-      <button data-tab="create" role="tab" class="tab-btn whitespace-nowrap px-3 sm:px-4 py-2 rounded-xl text-sm font-semibold border border-transparent text-slate-300 hover:text-white">✨ Criar eBook</button>
-      <button data-tab="library" role="tab" class="tab-btn whitespace-nowrap px-3 sm:px-4 py-2 rounded-xl text-sm font-semibold border border-transparent text-slate-300 hover:text-white">📚 Biblioteca</button>
-    </nav>
-    <div class="hidden md:flex items-center gap-2 text-xs">
-      <span id="api-status" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full glass text-slate-300">● Verificando API…</span>
-    </div>
+    <div class="flex-1"></div>
+    <span id="api-status" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full glass text-xs text-slate-300" aria-live="polite">● Verificando API…</span>
   </div>
 </header>
 
-<main class="max-w-7xl mx-auto px-4 sm:px-6 pb-24 pt-6 sm:pt-10">
+<main class="max-w-5xl mx-auto px-4 sm:px-6 pb-24 pt-8">
 
-  <!-- HERO -->
-  <section class="text-center mb-8 sm:mb-10 anim-fadeUp">
-    <span class="inline-flex items-center gap-2 text-xs font-semibold px-4 py-1.5 rounded-full glass text-violet-200 mb-4">✦ Novo · Geração de capítulos com IA · Capas automáticas</span>
-    <h1 class="font-display font-extrabold text-3xl sm:text-5xl lg:text-6xl leading-tight">Publique na Amazon<br><span class="gradient-text">como um profissional.</span></h1>
-    <p class="text-slate-400 max-w-2xl mx-auto mt-4 text-sm sm:text-base">Converta PDFs com detecção de capítulos, traduza obras inteiras preservando estilo e crie eBooks do zero com um wizard guiado. Exporte <strong class="text-slate-200">EPUB</strong> e <strong class="text-slate-200">DOCX</strong> prontos para o KDP.</p>
-    <div class="flex flex-wrap justify-center gap-2 mt-5 text-xs text-slate-300">
-      <span class="px-3 py-1.5 rounded-full glass">⚡ Sem instalação</span>
-      <span class="px-3 py-1.5 rounded-full glass">📖 EPUB + DOCX validados</span>
-      <span class="px-3 py-1.5 rounded-full glass">🤖 IA pt-BR / EN / ES</span>
-    </div>
+  <section class="text-center mb-8 anim-fadeUp">
+    <h1 class="font-display font-extrabold text-3xl sm:text-4xl leading-tight">Do PDF ao eBook<br><span class="gradient-text">pronto para publicar.</span></h1>
+    <p class="text-slate-400 max-w-2xl mx-auto mt-3 text-sm sm:text-base">Capítulos detectados pelo sumário do próprio PDF, revisão antes de exportar e tradução opcional para português brasileiro — tudo no mesmo fluxo.</p>
   </section>
 
-  <!-- ============ ABA 1: CONVERTER ============ -->
-  <section id="tab-converter" class="tab-panel active" role="tabpanel">
-    <div class="grid lg:grid-cols-5 gap-5">
-      <!-- upload -->
-      <div class="lg:col-span-2 glass rounded-3xl p-5 sm:p-6 gradient-border card-hover">
-        <h2 class="font-bold text-lg flex items-center gap-2">📄 Converter PDF → KDP</h2>
-        <p class="text-sm text-slate-400 mt-1">Arraste seu PDF, ajuste a limpeza e exporte em EPUB ou DOCX com capa e metadados.</p>
+  <!-- passos -->
+  <ol id="stepper" class="grid grid-cols-3 gap-2 mb-6" aria-label="Progresso">
+    <li class="step-item current text-center" data-step="1">
+      <div class="step-dot w-9 h-9 mx-auto rounded-full grid place-items-center font-extrabold text-sm border border-white/20 bg-white/5">📄</div>
+      <p class="text-[11px] sm:text-xs font-bold mt-1.5">1 · PDF e opções</p>
+      <div class="step-line h-1 rounded mt-2 bg-white/10"></div>
+    </li>
+    <li class="step-item text-center" data-step="2">
+      <div class="step-dot w-9 h-9 mx-auto rounded-full grid place-items-center font-extrabold text-sm border border-white/20 bg-white/5">⏳</div>
+      <p class="text-[11px] sm:text-xs font-bold mt-1.5">2 · Processando</p>
+      <div class="step-line h-1 rounded mt-2 bg-white/10"></div>
+    </li>
+    <li class="step-item text-center" data-step="3">
+      <div class="step-dot w-9 h-9 mx-auto rounded-full grid place-items-center font-extrabold text-sm border border-white/20 bg-white/5">📖</div>
+      <p class="text-[11px] sm:text-xs font-bold mt-1.5">3 · Revisar e exportar</p>
+      <div class="step-line h-1 rounded mt-2 bg-white/10"></div>
+    </li>
+  </ol>
 
-        <div id="dz-convert" class="dropzone mt-5 rounded-2xl p-6 sm:p-8 text-center cursor-pointer" tabindex="0" role="button" aria-label="Enviar arquivo PDF">
-          <input id="file-convert" type="file" accept=".pdf,application/pdf" class="hidden">
-          <div class="text-5xl mb-3 anim-float">📥</div>
-          <p class="font-semibold">Arraste seu PDF aqui</p>
-          <p class="text-sm text-slate-400">ou <span class="text-violet-300 underline font-semibold">clique para selecionar</span></p>
-          <p id="convert-filename" class="text-xs text-amber-300 mt-2 font-medium"></p>
-          <p class="text-[11px] text-slate-500 mt-1">PDF até 100 MB · processamento local + API</p>
+  <div class="glass rounded-3xl p-5 sm:p-7 gradient-border">
+
+    <!-- ============ PASSO 1 ============ -->
+    <section id="step-1" class="anim-fadeIn">
+      <div id="dz-file" class="dropzone rounded-2xl p-6 sm:p-9 text-center cursor-pointer" tabindex="0" role="button" aria-label="Enviar arquivo PDF">
+        <input id="file-input" type="file" accept=".pdf,application/pdf" class="hidden">
+        <div class="text-5xl mb-3 anim-float">📥</div>
+        <p class="font-semibold">Arraste seu PDF aqui</p>
+        <p class="text-sm text-slate-400">ou <span class="text-violet-300 underline font-semibold">clique para selecionar</span></p>
+        <p id="file-name" class="text-xs text-amber-300 mt-2 font-medium"></p>
+        <p class="text-[11px] text-slate-500 mt-1">Processamento 100% local · o PDF não sai da sua máquina</p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-3 mt-4">
+        <div>
+          <label class="text-xs font-semibold text-slate-300" for="inp-title">Título do livro</label>
+          <input id="inp-title" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Ex.: O Segredo do Vale">
         </div>
-
-        <div class="mt-5 space-y-3">
-          <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Remove cabeçalhos repetidos de cada página">
-            <span class="text-sm"><strong>Remover cabeçalhos</strong><br><span class="text-slate-400 text-xs">Tira títulos repetidos no topo das páginas</span></span>
-            <span id="tg-header" class="toggle on" role="switch" aria-checked="true" tabindex="0"></span>
-          </label>
-          <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Remove números de página soltos">
-            <span class="text-sm"><strong>Remover numeração</strong><br><span class="text-slate-400 text-xs">Elimina números de página isolados</span></span>
-            <span id="tg-pagenum" class="toggle on" role="switch" aria-checked="true" tabindex="0"></span>
-          </label>
-          <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Traduz o PDF (auto → pt-BR) antes de gerar o EPUB KDP">
-            <span class="text-sm"><strong>Traduzir antes de converter</strong><br><span class="text-slate-400 text-xs">Traduz o texto para pt-BR e gera o EPUB KDP no mesmo job</span></span>
-            <span id="tg-translate" class="toggle" role="switch" aria-checked="false" tabindex="0"></span>
-          </label>
-          <div id="conv-tr-opts" class="hidden grid grid-cols-2 gap-3">
-            <div>
-              <label class="text-xs font-semibold text-slate-300">De (idioma do PDF)</label>
-              <select id="conv-tr-from" class="field w-full mt-1 px-3 py-2.5 text-sm">
-                <option value="auto" selected>🌐 Detectar automaticamente</option>
-                <option value="pt-BR">🇧🇷 Português (BR)</option>
-                <option value="en">🇺🇸 Inglês</option>
-                <option value="es">🇪🇸 Espanhol</option>
-                <option value="fr">🇫🇷 Francês</option>
-                <option value="de">🇩🇪 Alemão</option>
-                <option value="it">🇮🇹 Italiano</option>
-              </select>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-300">Para</label>
-              <select id="conv-tr-to" class="field w-full mt-1 px-3 py-2.5 text-sm">
-                <option value="pt-BR" selected>🇧🇷 Português (BR)</option>
-                <option value="en">🇺🇸 Inglês</option>
-                <option value="es">🇪🇸 Espanhol</option>
-                <option value="fr">🇫🇷 Francês</option>
-                <option value="de">🇩🇪 Alemão</option>
-                <option value="it">🇮🇹 Italiano</option>
-              </select>
-            </div>
-            <div class="col-span-2">
-              <label class="text-xs font-semibold text-slate-300">Modelo de IA</label>
-              <select id="conv-tr-model" class="field w-full mt-1 px-3 py-2.5 text-sm">
-                <option value="" selected>Padrão do servidor</option>
-                <option value="gpt-4o-mini">⚡ gpt-4o-mini — rápido e econômico</option>
-                <option value="gpt-4o">🧠 gpt-4o — máxima qualidade literária</option>
-                <option value="gpt-4-turbo">🚀 gpt-4-turbo — textos longos</option>
-                <option value="gpt-3.5-turbo">💰 gpt-3.5-turbo — rascunhos baratos</option>
-              </select>
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="text-xs font-semibold text-slate-300">Título do livro</label>
-              <input id="conv-title" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Ex.: O Segredo do Vale">
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-300">Autor</label>
-              <input id="conv-author" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Ex.: Maria Silva">
-            </div>
-          </div>
-          <div>
-            <label class="text-xs font-semibold text-slate-300">Formato de saída</label>
-            <div class="grid grid-cols-2 gap-2 mt-1" id="conv-format">
-              <button data-fmt="epub" class="fmt-btn px-3 py-2.5 rounded-xl text-sm font-bold border border-violet-400/60 bg-violet-500/20">📕 EPUB</button>
-              <button data-fmt="docx" class="fmt-btn px-3 py-2.5 rounded-xl text-sm font-bold border border-white/10 glass text-slate-300">📘 DOCX</button>
-            </div>
-          </div>
-          <button id="btn-convert" class="w-full py-3.5 rounded-2xl font-extrabold text-white shadow-xl transition hover:scale-[1.01] active:scale-[.99] disabled:opacity-50" style="background:linear-gradient(135deg,#6366f1,#a855f7 55%,#ec4899)">⚡ Converter agora</button>
-          <div id="convert-progress" class="hidden">
-            <div class="flex justify-between text-xs text-slate-300 mb-1"><span id="convert-msg">Enviando…</span><span id="convert-pct">0%</span></div>
-            <div class="progress-track h-2.5"><div id="convert-bar" class="progress-fill h-full" style="width:0%"></div></div>
-          </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-300" for="inp-author">Autor</label>
+          <input id="inp-author" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Ex.: Maria Silva">
         </div>
       </div>
 
-      <!-- preview -->
-      <div class="lg:col-span-3 glass rounded-3xl p-5 sm:p-6 gradient-border">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="font-bold text-lg">👁️ Prévia dos capítulos</h3>
-          <div class="flex gap-2 no-print">
-            <button id="btn-dl-epub" class="px-4 py-2 rounded-xl text-sm font-bold bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/30 transition disabled:opacity-40" disabled>⬇ EPUB</button>
-            <button id="btn-dl-docx" class="px-4 py-2 rounded-xl text-sm font-bold bg-sky-500/20 border border-sky-400/40 text-sky-200 hover:bg-sky-500/30 transition disabled:opacity-40" disabled>⬇ DOCX</button>
-            <button id="btn-print" class="px-4 py-2 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">🖨 Imprimir</button>
-          </div>
-        </div>
-        <p class="text-xs text-slate-400 mt-1">Use os interruptores para incluir/excluir capítulos da exportação. Clique num capítulo para ler o trecho.</p>
-        <div id="chapters-empty" class="text-center py-14 text-slate-400">
-          <div class="text-6xl mb-3">📖</div>
-          <p class="font-semibold text-slate-300">Nenhum documento ainda</p>
-          <p class="text-sm mt-1">Envie um PDF para ver os capítulos detectados aqui.</p>
-          <button id="btn-demo-convert" class="mt-4 px-4 py-2 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">✨ Carregar exemplo demonstrativo</button>
-        </div>
-        <div id="chapters-list" class="hidden mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1"></div>
-        <div id="print-area" class="mt-5">
-          <div id="reader" class="paper p-6 sm:p-8 hidden">
-            <p id="reader-kicker" class="text-[11px] tracking-[.2em] uppercase text-amber-700 font-bold"></p>
-            <h3 id="reader-title" class="text-2xl font-bold mt-1 text-stone-900"></h3>
-            <div class="w-12 h-1 rounded my-3" style="background:linear-gradient(90deg,#6366f1,#a855f7)"></div>
-            <p id="reader-body" class="text-stone-700 leading-relaxed text-[15px] whitespace-pre-line"></p>
-          </div>
-        </div>
-        <div id="convert-stats" class="hidden mt-4 grid grid-cols-3 gap-2 text-center text-xs"></div>
+      <div class="mt-4 space-y-3">
+        <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Remove títulos repetidos no topo das páginas">
+          <span class="text-sm"><strong>Remover cabeçalhos</strong><br><span class="text-slate-400 text-xs">Tira o título corrente repetido no alto de cada página</span></span>
+          <span id="tg-header" class="toggle on" role="switch" aria-checked="true" tabindex="0"></span>
+        </label>
+        <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Remove números de página isolados">
+          <span class="text-sm"><strong>Remover numeração</strong><br><span class="text-slate-400 text-xs">Elimina números de página soltos</span></span>
+          <span id="tg-pagenum" class="toggle on" role="switch" aria-checked="true" tabindex="0"></span>
+        </label>
+        <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Traduz o PDF antes de gerar o EPUB">
+          <span class="text-sm"><strong>Traduzir antes de converter</strong><br><span class="text-slate-400 text-xs">Traduz o texto e gera o EPUB já no idioma de destino</span></span>
+          <span id="tg-translate" class="toggle" role="switch" aria-checked="false" tabindex="0"></span>
+        </label>
       </div>
-    </div>
-  </section>
 
-  <!-- ============ ABA 2: TRADUZIR ============ -->
-  <section id="tab-translate" class="tab-panel" role="tabpanel">
-    <div class="grid lg:grid-cols-5 gap-5">
-      <div class="lg:col-span-2 glass rounded-3xl p-5 sm:p-6 gradient-border card-hover">
-        <h2 class="font-bold text-lg">🌍 Traduzir obra</h2>
-        <p class="text-sm text-slate-400 mt-1">Tradução com IA preservando tom, capítulos e formatação.</p>
-        <div class="mt-4 space-y-3">
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="text-xs font-semibold text-slate-300">De</label>
-              <select id="tr-from" class="field w-full mt-1 px-3 py-2.5 text-sm">
-                <option value="pt-BR">🇧🇷 Português (BR)</option>
-                <option value="en">🇺🇸 Inglês</option>
-                <option value="es">🇪🇸 Espanhol</option>
-                <option value="fr">🇫🇷 Francês</option>
-                <option value="de">🇩🇪 Alemão</option>
-                <option value="it">🇮🇹 Italiano</option>
-              </select>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-300">Para</label>
-              <select id="tr-to" class="field w-full mt-1 px-3 py-2.5 text-sm">
-                <option value="en">🇺🇸 Inglês</option>
-                <option value="pt-BR">🇧🇷 Português (BR)</option>
-                <option value="es">🇪🇸 Espanhol</option>
-                <option value="fr">🇫🇷 Francês</option>
-                <option value="de">🇩🇪 Alemão</option>
-                <option value="it">🇮🇹 Italiano</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label class="text-xs font-semibold text-slate-300 flex items-center gap-2">Modelo de IA
-              <span class="text-[10px] font-extrabold px-2 py-0.5 rounded-full text-emerald-200 bg-emerald-500/20 border border-emerald-400/40">★ RECOMENDADO</span>
-            </label>
-            <select id="tr-model" class="field w-full mt-1 px-3 py-2.5 text-sm">
-              <option value="gpt-4o-mini" selected>⚡ gpt-4o-mini — rápido e econômico (recomendado)</option>
-              <option value="gpt-4o">🧠 gpt-4o — máxima qualidade literária</option>
-              <option value="gpt-4-turbo">🚀 gpt-4-turbo — textos longos</option>
-              <option value="gpt-3.5-turbo">💰 gpt-3.5-turbo — rascunhos baratos</option>
-            </select>
-            <p class="text-[11px] text-slate-500 mt-1">O <strong class="text-slate-300">gpt-4o-mini</strong> equilibra custo e fidelidade — ideal para livros inteiros.</p>
-          </div>
-          <div>
-            <label class="text-xs font-semibold text-slate-300">Texto ou arquivo</label>
-            <textarea id="tr-input" rows="6" class="field w-full mt-1 px-3 py-2.5 text-sm resize-y" placeholder="Cole aqui o capítulo ou texto a traduzir… (ou anexe um arquivo abaixo)"></textarea>
-            <label class="mt-2 flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 py-3 text-sm text-slate-300 cursor-pointer hover:bg-white/5 transition">
-              📎 <span id="tr-filename">Anexar PDF / .txt / .md / .docx</span>
-              <input id="file-translate" type="file" accept=".pdf,.txt,.md,.docx" class="hidden">
-            </label>
-          </div>
-          <label class="flex items-center gap-2 text-sm text-slate-300"><input id="tr-keep" type="checkbox" checked class="w-4 h-4 accent-violet-500"> Preservar capítulos e estilo do autor</label>
-          <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Gera o EPUB pronto para o KDP no mesmo job">
-            <span class="text-sm"><strong>Exportar EPUB KDP</strong><br><span class="text-slate-400 text-xs">Gera o arquivo para o KDP junto com a tradução</span></span>
-            <span id="tg-tr-export" class="toggle" role="switch" aria-checked="false" tabindex="0"></span>
-          </label>
-          <div id="tr-export-opts" class="hidden grid grid-cols-2 gap-3">
-            <div>
-              <label class="text-xs font-semibold text-slate-300">Título</label>
-              <input id="tr-exp-title" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Tradução">
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-300">Autor</label>
-              <input id="tr-exp-author" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Autor">
-            </div>
-          </div>
-          <button id="btn-translate" class="w-full py-3.5 rounded-2xl font-extrabold text-white shadow-xl transition hover:scale-[1.01] active:scale-[.99]" style="background:linear-gradient(135deg,#0ea5e9,#6366f1 60%,#a855f7)">🌍 Traduzir agora</button>
-          <div id="tr-progress" class="hidden">
-            <div class="flex justify-between text-xs text-slate-300 mb-1"><span id="tr-msg">Traduzindo…</span><span id="tr-pct">0%</span></div>
-            <div class="progress-track h-2.5"><div id="tr-bar" class="progress-fill h-full" style="width:0%"></div></div>
-          </div>
+      <div id="tr-opts" class="hidden grid sm:grid-cols-3 gap-3 mt-3">
+        <div>
+          <label class="text-xs font-semibold text-slate-300" for="tr-from">Idioma do PDF</label>
+          <select id="tr-from" class="field w-full mt-1 px-3 py-2.5 text-sm">
+            <option value="auto" selected>🌐 Detectar automaticamente</option>
+            <option value="en">🇺🇸 Inglês</option>
+            <option value="es">🇪🇸 Espanhol</option>
+            <option value="fr">🇫🇷 Francês</option>
+            <option value="de">🇩🇪 Alemão</option>
+            <option value="it">🇮🇹 Italiano</option>
+            <option value="pt-BR">🇧🇷 Português (BR)</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-300" for="tr-to">Traduzir para</label>
+          <select id="tr-to" class="field w-full mt-1 px-3 py-2.5 text-sm">
+            <option value="pt-BR" selected>🇧🇷 Português (BR)</option>
+            <option value="en">🇺🇸 Inglês</option>
+            <option value="es">🇪🇸 Espanhol</option>
+            <option value="fr">🇫🇷 Francês</option>
+            <option value="de">🇩🇪 Alemão</option>
+            <option value="it">🇮🇹 Italiano</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-300" for="tr-model">Modelo de IA</label>
+          <select id="tr-model" class="field w-full mt-1 px-3 py-2.5 text-sm">
+            <option value="" selected>Padrão do servidor</option>
+          </select>
         </div>
       </div>
-      <div class="lg:col-span-3 glass rounded-3xl p-5 sm:p-6 gradient-border">
-        <div class="flex items-center justify-between">
-          <h3 class="font-bold text-lg">📝 Resultado ao vivo</h3>
-          <div class="flex gap-2 no-print">
-            <button id="btn-tr-copy" class="px-3 py-2 rounded-xl text-xs font-bold glass hover:bg-white/10 transition">📋 Copiar</button>
-            <button id="btn-tr-dl" class="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 disabled:opacity-40" disabled>⬇ Baixar tradução</button>
-            <button id="btn-tr-dl-epub" class="hidden px-3 py-2 rounded-xl text-xs font-bold bg-violet-500/20 border border-violet-400/40 text-violet-200">📘 Baixar EPUB KDP</button>
-          </div>
-        </div>
-        <div id="tr-empty" class="text-center py-14 text-slate-400">
-          <div class="text-6xl mb-3">💬</div>
-          <p class="font-semibold text-slate-300">A tradução aparece aqui em tempo real</p>
-          <p class="text-sm mt-1">Escolha os idiomas, o modelo e clique em traduzir.</p>
-        </div>
-        <div id="tr-result" class="hidden mt-4 grid md:grid-cols-2 gap-3">
-          <div class="rounded-2xl p-4 bg-white/[.04] border border-white/10">
-            <p class="text-[11px] font-bold tracking-widest text-slate-400 uppercase mb-2">Original</p>
-            <p id="tr-orig" class="text-sm text-slate-300 whitespace-pre-line max-h-72 overflow-y-auto"></p>
-          </div>
-          <div class="rounded-2xl p-4 border border-violet-400/30 bg-violet-500/10">
-            <p class="text-[11px] font-bold tracking-widest text-violet-300 uppercase mb-2">Tradução</p>
-            <p id="tr-out" class="text-sm text-slate-100 whitespace-pre-line max-h-72 overflow-y-auto"></p>
-          </div>
-        </div>
-        <div id="tr-stats" class="hidden mt-3 text-xs text-slate-400"></div>
-      </div>
-    </div>
-  </section>
 
-  <!-- ============ ABA 3: CRIAR ============ -->
-  <section id="tab-create" class="tab-panel" role="tabpanel">
-    <div class="glass rounded-3xl p-5 sm:p-8 gradient-border">
+      <button id="btn-start" class="w-full mt-5 py-3.5 rounded-2xl font-extrabold text-white shadow-xl transition hover:scale-[1.01] active:scale-[.99] disabled:opacity-50" style="background:linear-gradient(135deg,#6366f1,#a855f7 55%,#ec4899)">⚡ Converter para EPUB</button>
+    </section>
+
+    <!-- ============ PASSO 2 ============ -->
+    <section id="step-2" class="hidden anim-fadeIn">
+      <h2 class="font-bold text-lg">Processando o PDF…</h2>
+      <p id="status-msg" class="text-sm text-slate-400 mt-1" aria-live="polite">Enviando o arquivo…</p>
+      <div class="mt-5">
+        <div class="flex justify-between text-xs text-slate-300 mb-1">
+          <span id="progress-msg">Iniciando…</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-track h-2.5"><div id="progress-bar" class="progress-fill h-full" style="width:0%"></div></div>
+      </div>
+      <button id="btn-cancel" class="mt-5 px-5 py-2.5 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">Cancelar</button>
+    </section>
+
+    <!-- ============ PASSO 3 ============ -->
+    <section id="step-3" class="hidden anim-fadeIn">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 class="font-bold text-xl">✨ Assistente de criação de eBook</h2>
-          <p class="text-sm text-slate-400">Do lampejo da ideia ao livro pronto em 4 passos guiados.</p>
+          <h2 class="font-bold text-lg">Revise e exporte</h2>
+          <p class="text-sm text-slate-400">Renomeie, reordene ou desligue capítulos antes de gerar o EPUB.</p>
         </div>
-        <button id="btn-demo-book" class="px-4 py-2 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">✨ Exemplo: romance de mistério</button>
+        <button id="btn-export" class="px-5 py-2.5 rounded-xl text-sm font-extrabold text-white shadow-lg transition hover:scale-[1.02] disabled:opacity-50" style="background:linear-gradient(135deg,#10b981,#0ea5e9)">⬇ Exportar EPUB</button>
       </div>
 
-      <!-- stepper -->
-      <ol id="stepper" class="mt-6 grid grid-cols-4 gap-1 sm:gap-2" aria-label="Progresso do wizard">
-        <li class="step-item current text-center" data-step="1">
-          <div class="step-dot w-9 h-9 mx-auto rounded-full grid place-items-center font-extrabold text-sm border border-white/20 bg-white/5">💡</div>
-          <p class="text-[11px] sm:text-xs font-bold mt-1.5">1 · Ideia</p>
-          <div class="step-line h-1 rounded mt-2 bg-white/10"></div>
-        </li>
-        <li class="step-item text-center" data-step="2">
-          <div class="step-dot w-9 h-9 mx-auto rounded-full grid place-items-center font-extrabold text-sm border border-white/20 bg-white/5">🎯</div>
-          <p class="text-[11px] sm:text-xs font-bold mt-1.5">2 · Escopo</p>
-          <div class="step-line h-1 rounded mt-2 bg-white/10"></div>
-        </li>
-        <li class="step-item text-center" data-step="3">
-          <div class="step-dot w-9 h-9 mx-auto rounded-full grid place-items-center font-extrabold text-sm border border-white/20 bg-white/5">🗂</div>
-          <p class="text-[11px] sm:text-xs font-bold mt-1.5">3 · Roteiro</p>
-          <div class="step-line h-1 rounded mt-2 bg-white/10"></div>
-        </li>
-        <li class="step-item text-center" data-step="4">
-          <div class="step-dot w-9 h-9 mx-auto rounded-full grid place-items-center font-extrabold text-sm border border-white/20 bg-white/5">📖</div>
-          <p class="text-[11px] sm:text-xs font-bold mt-1.5">4 · Capítulos + Capa</p>
-          <div class="step-line h-1 rounded mt-2 bg-white/10"></div>
-        </li>
-      </ol>
+      <div id="warn-box" class="hidden mt-4 rounded-2xl p-4 bg-amber-500/10 border border-amber-400/30 text-sm text-amber-100"></div>
 
-      <!-- PASSO 1 -->
-      <div class="wizard-pane mt-6" data-pane="1">
-        <label class="text-sm font-bold">Qual é a sua ideia de livro? <span class="text-slate-400 font-normal">Seja específico — a IA escreve melhor com detalhes.</span></label>
-        <textarea id="bk-idea" rows="4" class="field w-full mt-2 px-4 py-3 text-sm" placeholder="Ex.: Um romance de mistério ambientado numa vinícola no interior de Portugal, onde uma enóloga descobre cartas antigas que revelam um segredo de família…"></textarea>
-        <div class="flex flex-wrap gap-2 mt-3">
-          <span class="text-xs text-slate-400 self-center">💡 Inspirações:</span>
-          <button class="idea-chip px-3 py-1.5 rounded-full text-xs glass hover:bg-white/10 transition">Romance de época no Brasil colonial</button>
-          <button class="idea-chip px-3 py-1.5 rounded-full text-xs glass hover:bg-white/10 transition">Guia prático de finanças para jovens</button>
-          <button class="idea-chip px-3 py-1.5 rounded-full text-xs glass hover:bg-white/10 transition">Fantasia com dragões e magia ancestral</button>
-          <button class="idea-chip px-3 py-1.5 rounded-full text-xs glass hover:bg-white/10 transition">Thriller psicológico em São Paulo</button>
-        </div>
-      </div>
-
-      <!-- PASSO 2 -->
-      <div class="wizard-pane mt-6 hidden" data-pane="2">
-        <div class="grid sm:grid-cols-2 gap-3">
-          <div><label class="text-xs font-bold text-slate-300">📚 Gênero</label>
-            <select id="bk-genre" class="field w-full mt-1 px-3 py-2.5 text-sm">
-              <option>Romance</option><option>Mistério / Thriller</option><option>Fantasia</option><option>Ficção científica</option>
-              <option>Autoajuda</option><option>Negócios / Finanças</option><option>Biografia</option><option>Infantil</option><option>Não-ficção</option>
-            </select></div>
-          <div><label class="text-xs font-bold text-slate-300">🎨 Estilo de escrita</label>
-            <select id="bk-style" class="field w-full mt-1 px-3 py-2.5 text-sm">
-              <option>Literário e envolvente</option><option>Simples e direto</option><option>Poético</option><option>Jornalístico</option><option>Humorístico</option><option>Sombrio e tenso</option>
-            </select></div>
-          <div><label class="text-xs font-bold text-slate-300">👥 Público-alvo</label>
-            <select id="bk-audience" class="field w-full mt-1 px-3 py-2.5 text-sm">
-              <option>Jovens adultos (18–30)</option><option>Adultos (30–50)</option><option>Leitores 50+</option><option>Adolescentes (13–17)</option><option>Crianças</option><option>Público profissional</option>
-            </select></div>
-          <div><label class="text-xs font-bold text-slate-300">📏 Tamanho</label>
-            <select id="bk-size" class="field w-full mt-1 px-3 py-2.5 text-sm">
-              <option value="8">Curto — 8 capítulos</option>
-              <option value="12" selected>Padrão — 12 capítulos</option>
-              <option value="16">Longo — 16 capítulos</option>
-              <option value="20">Épico — 20 capítulos</option>
-            </select></div>
-        </div>
-        <div class="grid sm:grid-cols-2 gap-3 mt-3">
-          <div><label class="text-xs font-bold text-slate-300">✍️ Autor</label><input id="bk-author" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Nome do autor"></div>
-          <div><label class="text-xs font-bold text-slate-300">📖 Título provisório <span class="text-slate-500">(a IA pode sugerir)</span></label><input id="bk-title" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Ex.: O Segredo do Vale"></div>
-        </div>
-        <div class="mt-3 rounded-2xl p-4 bg-violet-500/10 border border-violet-400/30 text-sm">
-          <p class="font-bold text-violet-200 mb-1">👁️ Prévia ao vivo do projeto</p>
-          <p id="scope-preview" class="text-slate-300 text-sm">Preencha os campos para ver o resumo…</p>
-        </div>
-      </div>
-
-      <!-- PASSO 3 -->
-      <div class="wizard-pane mt-6 hidden" data-pane="3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <p class="text-sm font-bold">🗂 Roteiro editável <span class="text-slate-400 font-normal">— edite, arraste a ordem, adicione ou remova.</span></p>
-          <div class="flex gap-2">
-            <button id="btn-gen-outline" class="px-4 py-2 rounded-xl text-sm font-bold text-white shadow" style="background:linear-gradient(135deg,#6366f1,#a855f7)">🤖 Gerar roteiro com IA</button>
-            <button id="btn-add-ch" class="px-4 py-2 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">＋ Capítulo</button>
-          </div>
-        </div>
-        <div id="outline-progress" class="hidden mt-3">
-          <div class="progress-track h-2"><div class="progress-fill h-full" style="width:40%"></div></div>
-          <p class="text-xs text-slate-400 mt-1">Gerando roteiro…</p>
-        </div>
-        <div id="outline-list" class="mt-3 space-y-2"></div>
-      </div>
-
-      <!-- PASSO 4 -->
-      <div class="wizard-pane mt-6 hidden" data-pane="4">
-        <div class="grid lg:grid-cols-3 gap-4">
-          <div class="lg:col-span-2">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <p class="text-sm font-bold">📖 Capítulos gerados</p>
-              <button id="btn-gen-chapters" class="px-4 py-2 rounded-xl text-sm font-bold text-white shadow" style="background:linear-gradient(135deg,#10b981,#0ea5e9)">✍️ Gerar capítulos com IA</button>
-            </div>
-            <div id="book-progress" class="hidden mt-3">
-              <div class="flex justify-between text-xs text-slate-300 mb-1"><span id="book-msg">Escrevendo…</span><span id="book-pct">0%</span></div>
-              <div class="progress-track h-2.5"><div id="book-bar" class="progress-fill h-full" style="width:0%"></div></div>
-            </div>
-            <div id="book-chapters" class="mt-3 space-y-2 max-h-[380px] overflow-y-auto pr-1">
-              <p class="text-sm text-slate-500 text-center py-8">Os capítulos gerados aparecem aqui. Clique para ler e editar.</p>
-            </div>
-          </div>
-          <div>
-            <p class="text-sm font-bold mb-2">🎨 Capa do livro</p>
-            <div id="cover-box" class="cover-3d mx-auto w-44 aspect-[2/3] rounded-xl grid place-items-center text-center p-4 shadow-2xl" style="background:linear-gradient(160deg,#1e1b4b,#6d28d9 55%,#b45309)">
-              <div><p id="cover-title" class="font-display font-bold text-lg leading-tight">Seu título aqui</p><p id="cover-author" class="text-xs mt-2 opacity-80">Autor</p></div>
-            </div>
-            <input id="bk-cover-prompt" class="field w-full mt-3 px-3 py-2.5 text-sm" placeholder="Descreva a capa: vinícola ao pôr do sol, estilo aquarela…">
-            <button id="btn-gen-cover" class="w-full mt-2 py-2.5 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">🎨 Gerar capa com IA</button>
-            <div class="grid grid-cols-2 gap-2 mt-3">
-              <button id="btn-book-epub" class="py-2.5 rounded-xl text-sm font-bold bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 disabled:opacity-40" disabled>⬇ EPUB</button>
-              <button id="btn-book-docx" class="py-2.5 rounded-xl text-sm font-bold bg-sky-500/20 border border-sky-400/40 text-sky-200 disabled:opacity-40" disabled>⬇ DOCX</button>
-            </div>
-            <button id="btn-save-lib" class="w-full mt-2 py-2.5 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">💾 Salvar na Biblioteca</button>
-          </div>
-        </div>
-        <div id="book-reader" class="paper p-6 mt-4 hidden">
-          <p class="text-[11px] tracking-[.2em] uppercase text-amber-700 font-bold">Leitura · rascunho gerado por IA</p>
-          <h3 id="book-reader-title" class="text-2xl font-bold mt-1 text-stone-900"></h3>
+      <div class="grid lg:grid-cols-2 gap-4 mt-4">
+        <div id="chapters-list" class="space-y-2 max-h-[420px] overflow-y-auto pr-1"></div>
+        <div id="chapter-reader" class="paper p-6 hidden">
+          <p class="text-[11px] tracking-[.2em] uppercase text-amber-700 font-bold">Prévia do capítulo</p>
+          <h3 id="reader-title" class="text-2xl font-bold mt-1 text-stone-900"></h3>
           <div class="w-12 h-1 rounded my-3" style="background:linear-gradient(90deg,#6366f1,#a855f7)"></div>
-          <p id="book-reader-body" class="text-stone-700 leading-relaxed text-[15px] whitespace-pre-line" contenteditable="true" title="Clique para editar o texto"></p>
-          <p class="text-[11px] text-stone-400 mt-3">✏️ Dica: o texto acima é editável — clique e ajuste antes de exportar.</p>
+          <div id="reader-body" class="text-stone-700 leading-relaxed text-[15px] whitespace-pre-line max-h-[320px] overflow-y-auto"></div>
         </div>
       </div>
 
-      <!-- nav wizard -->
-      <div class="flex items-center justify-between mt-7 no-print">
-        <button id="wiz-back" class="px-5 py-2.5 rounded-xl text-sm font-bold glass hover:bg-white/10 transition disabled:opacity-40" disabled>← Voltar</button>
-        <p id="wiz-hint" class="text-xs text-slate-500 hidden sm:block">Dica: você pode voltar e ajustar qualquer etapa.</p>
-        <button id="wiz-next" class="px-6 py-2.5 rounded-xl text-sm font-extrabold text-white shadow-lg transition hover:scale-[1.02]" style="background:linear-gradient(135deg,#6366f1,#a855f7)">Continuar →</button>
+      <div class="flex flex-wrap items-center gap-3 mt-4">
+        <p id="job-stats" class="text-xs text-slate-400"></p>
+        <button id="btn-restart" class="ml-auto px-4 py-2 rounded-xl text-xs font-bold glass hover:bg-white/10 transition">↺ Converter outro PDF</button>
       </div>
-    </div>
-  </section>
+    </section>
+  </div>
 
-  <!-- ============ ABA 4: BIBLIOTECA ============ -->
-  <section id="tab-library" class="tab-panel" role="tabpanel">
-    <div class="glass rounded-3xl p-5 sm:p-6 gradient-border">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 class="font-bold text-lg">📚 Biblioteca de projetos</h2>
-          <p class="text-sm text-slate-400">Todos os EPUBs, DOCXs e traduções gerados — prontos para o KDP.</p>
-        </div>
-        <div class="flex gap-2">
-          <input id="lib-search" class="field px-3 py-2 text-sm w-44 sm:w-56" placeholder="🔍 Buscar por título…">
-          <button id="btn-lib-refresh" class="px-4 py-2 rounded-xl text-sm font-bold glass hover:bg-white/10 transition">↻ Atualizar</button>
-        </div>
-      </div>
-      <div id="lib-grid" class="mt-5 grid sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
-      <div id="lib-empty" class="text-center py-12 text-slate-400">
-        <div class="text-6xl mb-3">🗂</div>
-        <p class="font-semibold text-slate-300">Biblioteca vazia por enquanto</p>
-        <p class="text-sm mt-1">Converta, traduza ou crie um eBook e ele aparecerá aqui.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- FAQ / ajuda -->
   <section class="mt-8 grid md:grid-cols-3 gap-3 text-sm">
-    <div class="glass rounded-2xl p-4 card-hover"><p class="font-bold mb-1">📐 Padrão KDP</p><p class="text-slate-400 text-[13px]">EPUB com sumário navegável, metadados (título, autor, idioma) e capa 1600×2560 — dentro das exigências da Amazon.</p></div>
-    <div class="glass rounded-2xl p-4 card-hover"><p class="font-bold mb-1">🔌 API ligada?</p><p class="text-slate-400 text-[13px]">O app tenta <code class="text-violet-300">/api/*</code> automaticamente. Sem backend, ativa o <strong class="text-slate-200">modo demonstração</strong> para você explorar tudo.</p></div>
-    <div class="glass rounded-2xl p-4 card-hover"><p class="font-bold mb-1">🖨 Impressão</p><p class="text-slate-400 text-[13px]">Use o botão Imprimir na prévia para gerar um PDF limpo de revisão antes de publicar.</p></div>
+    <div class="glass rounded-2xl p-4 card-hover"><p class="font-bold mb-1">📐 Padrão KDP</p><p class="text-slate-400 text-[13px]">EPUB 3 com sumário navegável, metadados e estilos de leitura; o arquivo é validado antes de ser gravado.</p></div>
+    <div class="glass rounded-2xl p-4 card-hover"><p class="font-bold mb-1">🔍 Capítulos pelo sumário</p><p class="text-slate-400 text-[13px]">Quando o PDF tem bookmarks, eles mandam; sem bookmarks, a estrutura é inferida pelos tamanhos de fonte.</p></div>
+    <div class="glass rounded-2xl p-4 card-hover"><p class="font-bold mb-1">🌍 Tradução literária</p><p class="text-slate-400 text-[13px]">Tradução em lote, com progresso real e estrutura de parágrafos preservada.</p></div>
   </section>
 </main>
 
 <footer class="border-t border-white/10 py-6 text-center text-xs text-slate-500">
-  <p>📚 <strong class="text-slate-300">KDP Studio</strong> · feito com carinho para autores independentes · <span class="gradient-text font-bold">Do manuscrito ao best-seller</span></p>
+  <p>📚 <strong class="text-slate-300">KDP Studio</strong> · feito para autores independentes · <span class="gradient-text font-bold">do PDF ao best-seller</span></p>
 </footer>
 
 <div id="toast-root" aria-live="polite"></div>
-
 <script src="app.js"></script>
 </body>
 </html>
