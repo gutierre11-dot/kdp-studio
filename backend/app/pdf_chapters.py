@@ -20,8 +20,9 @@ SIMILARITY_MIN = 0.72
 REANCHOR_MIN = 0.5
 # Fracao minima de entradas ancoradas para confiar no outline.
 ANCHOR_COVERAGE_MIN = 0.80
-# Linhas acima desta fracao da altura da pagina sao candidatas a titulo.
-_TOP_BAND = 0.6
+# Linhas abaixo desta fracao da altura da pagina nao podem ser ancoradas
+# (ali ficam rodapes e numeracao).
+_SKIP_FOOTER = 0.93
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
 
@@ -79,10 +80,12 @@ def anchor_outline(lines: list[Line], outline: list[list],
                    body_size: float) -> list[Anchor]:
     """Ancora as entradas do outline a linhas reais do documento.
 
-    So considera linhas na banda superior da pagina da entrada e exige ordem
-    monotonica de leitura. Uma entrada que nao casa bem e reancorada a uma linha
-    elegivel (similaridade >= REANCHOR_MIN); se ainda assim nao houver
-    candidato, a entrada e descartada em vez de virar um capitulo fantasma.
+    A entrada pode apontar para um titulo no topo da pagina (capitulo) ou no
+    meio dela (secao), entao nao ha filtro de banda superior: apenas o rodape e
+    descartado. Exige ordem monotonica de leitura. Uma entrada que nao casa bem
+    e reancorada a uma linha elegivel (similaridade >= REANCHOR_MIN); se ainda
+    assim nao houver candidato, a entrada e descartada em vez de virar um
+    capitulo fantasma.
     """
     por_pagina: dict[int, list[int]] = defaultdict(list)
     for i, linha in enumerate(lines):
@@ -102,7 +105,7 @@ def anchor_outline(lines: list[Line], outline: list[list],
             continue
         candidatos = [i for i in por_pagina.get(pno, [])
                       if i > ultimo
-                      and lines[i].bbox[1] < _TOP_BAND * lines[i].page_height]
+                      and lines[i].bbox[3] <= _SKIP_FOOTER * lines[i].page_height]
         escolha, score = _melhor(candidatos, titulo, body_size, lines)
         if escolha is not None and score >= SIMILARITY_MIN:
             anchors.append((escolha, int(nivel), str(titulo)))
@@ -182,6 +185,7 @@ __all__ = [
     "detect_headings",
     "is_page_number",
     "join_paragraphs",
+    "merge_empty_parents",
     "modal_body_size",
     "normalize",
     "outline_coverage",
@@ -402,6 +406,32 @@ def assemble_chapters(lines: list[Line], anchors: list[Anchor]) -> list[Chapter]
     return capitulos
 
 
+def merge_empty_parents(chapters: list[Chapter]) -> list[Chapter]:
+    """Funde cabecalhos-pai sem conteudo no capitulo seguinte.
+
+    Livros costumam trazer "Capitulo 1" e, logo abaixo, o titulo do capitulo
+    como um segundo cabecalho. Sem esta fusao, o capitulo-pai vira uma pagina
+    vazia que a sanidade descarta — e com ela o titulo real do capitulo.
+    """
+    saida: list[Chapter] = []
+    pendentes: list[Chapter] = []
+    for capitulo in chapters:
+        if not capitulo.paragraphs:
+            pendentes.append(capitulo)
+            continue
+        if pendentes and capitulo.level > pendentes[-1].level:
+            titulo = " — ".join([p.title for p in pendentes if p.title]
+                                + [capitulo.title])
+            nivel = min([p.level for p in pendentes] + [capitulo.level])
+            saida.append(Chapter(titulo, nivel, capitulo.paragraphs))
+        else:
+            saida.extend(pendentes)
+            saida.append(capitulo)
+        pendentes = []
+    saida.extend(pendentes)
+    return saida
+
+
 def _agrupar_ate(chapters: list[Chapter], limite: int) -> list[Chapter]:
     """Junta capitulos consecutivos em no maximo `limite` grupos."""
     if limite <= 0 or len(chapters) <= limite:
@@ -476,5 +506,6 @@ def build_chapters(pdf_path, *, remove_header: bool = True,
                                     if i in novo_indice]
 
     capitulos = assemble_chapters(limpas, anchors_limpos)
+    capitulos = merge_empty_parents(capitulos)
     capitulos, avisos_sanidade = sanitize(capitulos, pages)
     return capitulos, avisos + avisos_sanidade

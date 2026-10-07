@@ -7,6 +7,7 @@ from backend.app.pdf_chapters import (
     detect_headings,
     is_page_number,
     join_paragraphs,
+    merge_empty_parents,
     modal_body_size,
     normalize,
     remove_running_lines,
@@ -57,8 +58,16 @@ def test_entradas_duplicadas_nao_produzem_ancoras_repetidas():
     assert [i for i, _, _ in anchors] == sorted(i for i, _, _ in anchors)
 
 
-def test_candidato_abaixo_da_banda_de_topo_nao_e_ancorado():
-    linhas = [_linha(0, "corpo", 10.0, 700, h=800.0)]
+def test_titulo_no_meio_da_pagina_e_ancorado():
+    """Secoes comecam no meio da pagina; so o rodape deve ser descartado."""
+    linhas = [_linha(0, "corpo do texto", 10.0, 200, h=800.0),
+              _linha(0, "Seção no meio", 21.0, 500, h=800.0)]
+    anchors = anchor_outline(linhas, [[1, "Seção no meio", 1]], 10.0)
+    assert anchors == [(1, 1, "Seção no meio")]
+
+
+def test_linha_de_rodape_nao_e_ancorada():
+    linhas = [_linha(0, "corpo", 10.0, 760, h=800.0)]
     assert anchor_outline(linhas, [[1, "corpo", 1]], 10.0) == []
 
 
@@ -190,3 +199,30 @@ def test_build_chapters_pdf_sem_texto(tmp_path):
 def test_build_chapters_usa_outline(make_bookmark_pdf):
     chs, _ = build_chapters(make_bookmark_pdf)
     assert [c.title for c in chs] == ["Capítulo Um", "Capítulo Dois"]
+
+
+def test_funde_titulo_pai_sem_conteudo_no_proximo_capitulo():
+    chs = [Chapter("Capítulo 1", 1, []),
+           Chapter("Quadro geral", 2, [Paragraph.from_text("texto")])]
+    out = merge_empty_parents(chs)
+    assert len(out) == 1
+    assert out[0].title == "Capítulo 1 — Quadro geral"
+    assert out[0].level == 1
+    assert [p.text for p in out[0].paragraphs] == ["texto"]
+
+
+def test_funde_cadeia_de_pais_vazios():
+    chs = [Chapter("Parte I", 1, []),
+           Chapter("Capítulo 1", 2, []),
+           Chapter("A Chegada", 3, [Paragraph.from_text("texto")])]
+    out = merge_empty_parents(chs)
+    assert len(out) == 1
+    assert out[0].title == "Parte I — Capítulo 1 — A Chegada"
+    assert out[0].level == 1
+
+
+def test_nao_funde_capitulo_vazio_sem_filho():
+    chs = [Chapter("Cover", 1, []),
+           Chapter("Texto", 1, [Paragraph.from_text("x")])]
+    out = merge_empty_parents(chs)
+    assert [c.title for c in out] == ["Cover", "Texto"]

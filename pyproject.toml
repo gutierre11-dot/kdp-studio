@@ -23,6 +23,9 @@ dependencies = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+markers = [
+    "acceptance: testes que exigem PDFs reais (KDP_REAL_PDFS_DIR)",
+]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
