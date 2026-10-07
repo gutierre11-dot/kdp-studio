@@ -42,6 +42,44 @@ LANG_NAMES = {
 # Fronteiras preferenciais de corte, da melhor para a pior.
 _BOUNDARIES = (r"\n\n", r"(?<=[.!?\u2026])\s", r"\s")
 
+# Palavras funcionais por idioma: baratas e suficientes para decidir entre
+# idiomas europeus comuns, sem dependencia nova.
+_STOPWORDS: dict[str, set[str]] = {
+    "pt": {"de", "que", "nao", "os", "as", "um", "uma", "para", "com", "por",
+           "do", "da", "em", "se", "no", "na", "mais", "como"},
+    "en": {"the", "of", "and", "to", "in", "is", "that", "for", "with", "as",
+           "was", "his", "her", "it", "on", "at", "by"},
+    "es": {"el", "la", "de", "que", "y", "en", "los", "una", "para", "con",
+           "por", "del", "se", "no", "su", "al"},
+    "fr": {"le", "la", "les", "des", "est", "une", "pour", "dans", "que",
+           "qui", "et", "un", "du", "au", "sur"},
+    "de": {"der", "die", "das", "und", "ist", "nicht", "ein", "mit", "von",
+           "den", "sich", "auf", "dem", "des"},
+    "it": {"il", "la", "di", "che", "un", "una", "per", "con", "non", "del",
+           "della", "sono", "come", "gli"},
+}
+
+# Codigo do detector -> codigo usado no EPUB (dc:language).
+_LANG_CODES = {"pt": "pt-BR", "en": "en", "es": "es", "fr": "fr",
+               "de": "de", "it": "it"}
+
+
+def detect_language(text: str, default: str = DEFAULT_TARGET_LANG) -> str:
+    """Estimativa simples do idioma do texto, por palavras funcionais.
+
+    Usada apenas para preencher `dc:language` quando o usuario nao informa o
+    idioma e nao ha traducao; nao afeta o texto do livro.
+    """
+    palavras = re.findall(r"[a-z\u00e0-\u00ff]+", (text or "").lower())[:4000]
+    if not palavras:
+        return default
+    contagem = {codigo: sum(1 for p in palavras if p in palavras_chave)
+                for codigo, palavras_chave in _STOPWORDS.items()}
+    melhor = max(contagem, key=lambda c: contagem[c])
+    if contagem[melhor] <= 0:
+        return default
+    return _LANG_CODES.get(melhor, default)
+
 
 def lang_name(code: str | None) -> str:
     """Nome legivel do idioma; devolve o proprio codigo se desconhecido."""

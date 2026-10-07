@@ -252,6 +252,7 @@
 
   function concluir(job) {
     estado.titulo = job.title;
+    estado.idioma = job.language;
     estado.capitulos = (job.chapters || []).map(c => ({
       index: c.index, title: c.title, level: c.level,
       words: c.words, preview: c.preview, included: true,
@@ -333,7 +334,8 @@
     const incluidas = estado.capitulos.filter(c => c.included);
     const palavras = incluidas.reduce((soma, c) => soma + (c.words || 0), 0);
     $('#job-stats').textContent = estado.capitulos.length + ' capítulos · ' +
-      incluidas.length + ' incluídos · ' + palavras.toLocaleString('pt-BR') + ' palavras';
+      incluidas.length + ' incluídos · ' + palavras.toLocaleString('pt-BR') +
+      ' palavras · idioma ' + (estado.idioma || 'pt-BR');
     $('#btn-export').disabled = incluidas.length === 0;
   }
 

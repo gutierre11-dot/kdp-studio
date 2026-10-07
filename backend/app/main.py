@@ -233,8 +233,16 @@ async def criar_job(
         raise HTTPException(422, SEM_TEXTO)
 
     store.prune()
-    idioma = destino if traduzir else (
-        origem if origem != DEFAULT_SOURCE_LANG else "pt-BR")
+    if traduzir:
+        idioma = destino
+    elif origem != DEFAULT_SOURCE_LANG:
+        idioma = origem
+    else:
+        # Sem traducao e sem idioma informado: estima pelo proprio texto, senao
+        # o EPUB sairia com dc:language errado no KDP.
+        amostra = "\n".join(p.text for c in capitulos[:3]
+                            for p in c.paragraphs[:20])
+        idioma = translate.detect_language(amostra)
     job = store.create(title=_texto(title, "Livro"), author=_texto(author, "Autor"),
                        language=idioma, source_name=file.filename or "documento.pdf",
                        translated=traduzir)

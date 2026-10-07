@@ -8,6 +8,7 @@ from backend.app.models import Chapter, Paragraph
 from backend.app.translate import (
     CancelledError,
     build_system_prompt,
+    detect_language,
     split_chunks,
     translate_chapter,
     translate_chapters,
@@ -172,3 +173,21 @@ def test_lista_vazia_nao_quebra():
                                      target_lang="pt-BR", model=None, workers=1,
                                      chunk_chars=6000)
     assert out == [] and avisos == []
+
+
+def test_detect_language_reconhece_ingles_e_portugues():
+    ingles = ("The cellar smelled of oak and time. She held the letter with her "
+              "fingertips, as if the paper might dissolve. There are truths "
+              "that wine keeps better than men, and that is why the letter "
+              "matters to her.")
+    portugues = ("A adega cheirava a carvalho e tempo. Ela segurou a carta com "
+                 "as pontas dos dedos, como se o papel pudesse se desfazer. "
+                 "Existem verdades que o vinho guarda melhor que os homens, e "
+                 "por isso a carta importa para ela.")
+    assert detect_language(ingles) == "en"
+    assert detect_language(portugues) == "pt-BR"
+
+
+def test_detect_language_sem_texto_usa_o_padrao():
+    assert detect_language("") == "pt-BR"
+    assert detect_language("1234 5678") == "pt-BR"
