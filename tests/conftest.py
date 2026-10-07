@@ -95,6 +95,21 @@ PAGES_3 = [
 
 
 @pytest.fixture
+def settings():
+    """Fabrica de `Settings` com overrides (usa dataclasses.replace)."""
+    from dataclasses import replace
+
+    from backend.app.config import get_settings
+
+    base = get_settings()
+
+    def _settings(**overrides):
+        return replace(base, **overrides)
+
+    return _settings
+
+
+@pytest.fixture
 def make_bookmark_pdf(tmp_path):
     """PDF de 2 páginas cujos títulos têm bookmarks correspondentes."""
     import pymupdf
