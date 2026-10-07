@@ -30,33 +30,51 @@ python3 -m uvicorn backend.app.main:app --port 8000
 
 Abra **http://127.0.0.1:8000** — o backend serve o frontend em `/`.
 
-> Sem `OPENAI_API_KEY` e sem `GEMINI_API_KEY` o app **continua funcionando**
-> para PDF → EPUB; apenas a tradução fica indisponível, e a interface avisa.
+> Sem nenhuma chave de IA o app **continua funcionando** para PDF → EPUB;
+> apenas a tradução fica indisponível, e a interface avisa.
 
-## ⚙️ Configuração
+## 🔑 Configurando a IA
 
-Copie `.env.example` para `.env` na raiz do projeto. Mantenha **um único** `.env`.
+O caminho recomendado é o script interativo — ele pergunta a chave, valida com
+uma chamada real à API e só então grava no `.env` (permissão `600`):
+
+```bash
+./configurar-ia.sh
+```
+
+A chave é digitada com **entrada oculta**: não aparece na tela, não entra no
+histórico do shell e não é ecoada pelo script. Se a validação falhar, nada é
+gravado.
+
+Para configurar à mão, copie `.env.example` para `.env` na raiz do projeto.
+Mantenha **um único** `.env`.
 
 | Variável | Padrão | Uso |
 |---|---|---|
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | — | provider OpenAI (ou compatível: OpenRouter, DeepSeek…) |
+| `LLM_PROVIDER` | — | força `deepseek`, `openai`, `gemini` ou `offline` quando há mais de uma chave |
+| `DEEPSEEK_API_KEY` | — | provider DeepSeek (recomendado) |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | endereço da API DeepSeek |
+| `DEEPSEEK_MODEL` | `deepseek-flash` | modelo principal de tradução |
+| `DEEPSEEK_MODEL_FALLBACKS` | `deepseek-v4-pro` | cadeia tentada quando o principal falha |
+| `DEEPSEEK_THINKING` | `0` | modo de raciocínio (ligar multiplica tempo e custo) |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | — | provider OpenAI ou compatível (OpenRouter, proxy…) |
 | `GEMINI_API_KEY` | — | provider Gemini (endpoint OpenAI-compatible) |
-| `GEMINI_MODEL` | `gemini-flash-latest` | modelo primário de tradução |
-| `GEMINI_MODEL_FALLBACKS` | `gemini-3.8-flash,gemini-3.7-flash,gemini-3.1-flash-lite` | cadeia tentada quando o primário falha (404/503) |
-| `TRANSLATION_MODEL` | — | força um modelo específico (ignora a cadeia) |
+| `GEMINI_MODEL` / `GEMINI_MODEL_FALLBACKS` | `gemini-flash-latest` / `gemini-3.8-flash,…` | modelos do Gemini |
+| `TRANSLATION_MODEL` | — | força um modelo específico (ignora a cadeia do provider) |
 | `TRANSLATION_CHUNK_CHARS` | `6000` | caracteres por chamada de tradução |
 | `TRANSLATION_WORKERS` | `4` | chamadas de tradução em paralelo |
-| `LLM_TIMEOUT_SECONDS` | `120` | timeout por chamada de LLM |
+| `LLM_TIMEOUT_SECONDS` | `60` | timeout por chamada de LLM |
 | `LLM_MAX_RETRIES` | `3` | rodadas completas pela cadeia de modelos |
+| `LLM_MAX_TOTAL_SECONDS` | `180` | teto de tempo de **uma** chamada de chat, somando modelos e rodadas |
 | `MAX_UPLOAD_MB` | `100` | tamanho máximo do PDF |
 | `JOB_TTL_SECONDS` / `JOB_MAX` / `JOB_WORKERS` | `7200` / `50` / `2` | retenção e paralelismo dos jobs |
 | `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | origens permitidas |
 | `HOST` / `PORT` / `RELOAD` | `127.0.0.1` / `8000` / `0` | servidor |
 
-> **Provider:** se `OPENAI_API_KEY` existir, ele ganha; senão vale o
-> `GEMINI_API_KEY`. Modelos Gemini mudam com frequência — por isso existe a
-> cadeia de fallback: quando um modelo responde 404/503, o próximo assume, e o
-> modelo que funcionou passa a ser tentado primeiro nas chamadas seguintes.
+> **Prioridade do provider:** `LLM_PROVIDER` (se definido) → DeepSeek → OpenAI →
+> Gemini → offline. Modelos de provedor mudam com frequência — por isso existe a
+> cadeia de fallback: quando o principal responde 404/429/503, o próximo assume,
+> e o modelo que funcionou passa a ser tentado primeiro nas chamadas seguintes.
 
 ## 🔌 API
 
@@ -96,7 +114,8 @@ extraível (OCR de PDFs escaneados não é suportado).
 ```
 kdp-studio/
 ├── backend/app/
-│   ├── config.py        # Settings: env, limites, timeouts, cadeia de modelos
+│   ├── config.py        # Settings: env, limites, timeouts, modelos por provider
+│   ├── env_file.py      # atualização segura do .env (usado pelo configurar-ia.sh)
 │   ├── models.py        # Run, Line, Paragraph, Chapter, ChapterView, JobState
 │   ├── jobs.py          # JobStore: progresso, cancelamento, TTL
 │   ├── llm.py           # provider + timeout + retry + fallback de modelos
@@ -107,6 +126,7 @@ kdp-studio/
 │   └── main.py          # rotas
 ├── static/{index.html,app.js,styles.css,vendor/tailwind.js}
 ├── tests/               # unitários, API e aceitação com PDFs reais
+├── configurar-ia.sh     # configuração interativa da chave de IA
 └── docs/superpowers/    # spec e plano da refatoração
 ```
 

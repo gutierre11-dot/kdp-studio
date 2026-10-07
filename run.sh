@@ -37,6 +37,13 @@ if ! python3 -c "import fastapi, uvicorn, pymupdf, ebooklib, openai, httpx, dote
   python3 -m pip install -r requirements.txt
 fi
 
+# Dica de configuração: sem chave, o app funciona, mas sem tradução.
+if ! grep -qE '^(DEEPSEEK|OPENAI|GEMINI)_API_KEY=.+' .env 2>/dev/null; then
+  echo "Dica: nenhuma chave de IA configurada — a tradução ficará indisponível."
+  echo "      Rode ./configurar-ia.sh para habilitar."
+  echo
+fi
+
 echo "KDP Studio rodando em:"
 echo "  App:    http://127.0.0.1:$PORT"
 echo "  Health: http://127.0.0.1:$PORT/api/health"

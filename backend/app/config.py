@@ -17,8 +17,10 @@ log = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[2]  # kdp-studio/
 
 DEFAULT_CORS = "http://localhost:8000,http://127.0.0.1:8000"
-DEFAULT_FALLBACKS = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.1-flash-lite"
-DEFAULT_PRIMARY_MODEL = "gemini-flash-latest"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-flash"
+DEFAULT_DEEPSEEK_FALLBACKS = "deepseek-v4-pro"
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+DEFAULT_GEMINI_FALLBACKS = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.1-flash-lite"
 
 
 def load_env() -> list[str]:
@@ -63,6 +65,13 @@ def _list(name: str, default: str) -> list[str]:
     return [p.strip() for p in (_raw(name) or default).split(",") if p.strip()]
 
 
+def _flag(name: str, default: bool = False) -> bool:
+    valor = _raw(name)
+    if not valor:
+        return default
+    return valor.lower() in ("1", "true", "on", "yes", "sim")
+
+
 @dataclass(frozen=True)
 class Settings:
     """Configuracao efetiva da aplicacao."""
@@ -78,8 +87,11 @@ class Settings:
     llm_timeout_seconds: float
     llm_max_retries: int
     llm_max_total_seconds: float
-    primary_model: str
-    fallback_models: list[str]
+    deepseek_model: str
+    deepseek_fallbacks: list[str]
+    deepseek_thinking: bool
+    gemini_model: str
+    gemini_fallbacks: list[str]
     host: str
     port: int
     reload: bool
@@ -100,8 +112,12 @@ def get_settings() -> Settings:
         llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60.0),
         llm_max_retries=_int("LLM_MAX_RETRIES", 3),
         llm_max_total_seconds=_float("LLM_MAX_TOTAL_SECONDS", 180.0),
-        primary_model=_raw("GEMINI_MODEL") or DEFAULT_PRIMARY_MODEL,
-        fallback_models=_list("GEMINI_MODEL_FALLBACKS", DEFAULT_FALLBACKS),
+        deepseek_model=_raw("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL,
+        deepseek_fallbacks=_list("DEEPSEEK_MODEL_FALLBACKS",
+                                 DEFAULT_DEEPSEEK_FALLBACKS),
+        deepseek_thinking=_flag("DEEPSEEK_THINKING", False),
+        gemini_model=_raw("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL,
+        gemini_fallbacks=_list("GEMINI_MODEL_FALLBACKS", DEFAULT_GEMINI_FALLBACKS),
         host=_raw("HOST") or "127.0.0.1",
         port=_int("PORT", 8000),
         reload=_raw("RELOAD").lower() in ("1", "true", "on"),

@@ -1,13 +1,17 @@
-"""Acesso ao LLM via endpoint OpenAI-compatible (OpenAI ou Gemini).
+"""Acesso ao LLM via endpoint OpenAI-compatible (DeepSeek, OpenAI ou Gemini).
 
 Camada fina e resiliente: um unico ponto (`chat`) concentra timeout por
 chamada, tentativas em rodadas e **cadeia de fallback de modelos**, porque os
-modelos Gemini mudam e respondem 404/503 com frequencia. Sem isso, uma
-traducao de livro ficava pendurada indefinidamente.
+modelos dos provedores mudam e respondem 404/429/503 com frequencia. Sem isso,
+uma traducao de livro ficava pendurada indefinidamente.
 
-Variaveis de ambiente: OPENAI_API_KEY, OPENAI_BASE_URL, GEMINI_API_KEY,
-GEMINI_MODEL, GEMINI_MODEL_FALLBACKS, TRANSLATION_MODEL, LLM_TIMEOUT_SECONDS,
-LLM_MAX_RETRIES.
+Prioridade do provider ativo: `LLM_PROVIDER` (se definido) -> DeepSeek ->
+OpenAI -> Gemini -> offline.
+
+Variaveis de ambiente: LLM_PROVIDER, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL,
+DEEPSEEK_MODEL, DEEPSEEK_MODEL_FALLBACKS, DEEPSEEK_THINKING, OPENAI_API_KEY,
+OPENAI_BASE_URL, GEMINI_API_KEY, GEMINI_MODEL, GEMINI_MODEL_FALLBACKS,
+TRANSLATION_MODEL, LLM_TIMEOUT_SECONDS, LLM_MAX_RETRIES, LLM_MAX_TOTAL_SECONDS.
 """
 from __future__ import annotations
 
@@ -22,8 +26,11 @@ from . import config
 
 log = logging.getLogger(__name__)
 
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OPENAI_DEFAULT_TRANSLATION_MODEL = "gpt-4o-mini"
+
+_PROVIDERS = ("deepseek", "openai", "gemini", "offline")
 
 _lock = threading.Lock()
 _modelo_resolvido: str | None = None
@@ -31,6 +38,10 @@ _modelo_resolvido: str | None = None
 
 class LLMError(RuntimeError):
     """Falha recuperavel ou definitiva de uma chamada de LLM."""
+
+
+def deepseek_configured() -> bool:
+    return bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())
 
 
 def openai_configured() -> bool:
@@ -42,7 +53,16 @@ def gemini_configured() -> bool:
 
 
 def provider_name() -> str:
-    """`openai`, `gemini` ou `offline` (sem nenhuma chave)."""
+    """`deepseek`, `openai`, `gemini` ou `offline`.
+
+    `LLM_PROVIDER` manda quando define um dos valores conhecidos; assim o
+    usuario pode forcar um provider mesmo tendo chaves de varios.
+    """
+    forcado = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    if forcado in _PROVIDERS:
+        return forcado
+    if deepseek_configured():
+        return "deepseek"
     if openai_configured():
         return "openai"
     if gemini_configured():
@@ -70,21 +90,44 @@ def model_candidates() -> list[str]:
     """Modelos a tentar, em ordem, sem repeticoes.
 
     `TRANSLATION_MODEL` explicito tem prioridade absoluta; caso contrario, o
-    modelo primario seguido da cadeia de fallback (so faz sentido no Gemini).
+    modelo principal do provider ativo seguido da cadeia de fallback dele.
     """
     explicito = (os.getenv("TRANSLATION_MODEL") or "").strip()
     if explicito:
         return [explicito]
-    if provider_name() == "openai":
-        return [OPENAI_DEFAULT_TRANSLATION_MODEL]
     cfg = config.get_settings()
+    provider = provider_name()
+    if provider == "deepseek":
+        modelos = [cfg.deepseek_model] + list(cfg.deepseek_fallbacks)
+    elif provider == "gemini":
+        modelos = [cfg.gemini_model] + list(cfg.gemini_fallbacks)
+    elif provider == "openai":
+        modelos = [OPENAI_DEFAULT_TRANSLATION_MODEL]
+    else:
+        return []
     vistos: set[str] = set()
     saida: list[str] = []
-    for modelo in [cfg.primary_model] + list(cfg.fallback_models):
+    for modelo in modelos:
         if modelo and modelo not in vistos:
             vistos.add(modelo)
             saida.append(modelo)
     return saida
+
+
+def client_settings() -> tuple[str, str | None]:
+    """`(api_key, base_url)` do provider ativo; levanta LLMError se offline."""
+    provider = provider_name()
+    if provider == "deepseek":
+        return (os.getenv("DEEPSEEK_API_KEY", "").strip(),
+                (os.getenv("DEEPSEEK_BASE_URL") or "").strip()
+                or DEEPSEEK_BASE_URL)
+    if provider == "openai":
+        return (os.getenv("OPENAI_API_KEY", "").strip(),
+                (os.getenv("OPENAI_BASE_URL") or "").strip() or None)
+    if provider == "gemini":
+        return (os.getenv("GEMINI_API_KEY", "").strip(), GEMINI_BASE_URL)
+    raise LLMError("Nenhuma chave de IA configurada (DEEPSEEK_API_KEY, "
+                   "OPENAI_API_KEY ou GEMINI_API_KEY).")
 
 
 def make_client(*, timeout: float | None = None, max_retries: int = 0) -> Any:
@@ -93,16 +136,20 @@ def make_client(*, timeout: float | None = None, max_retries: int = 0) -> Any:
 
     if timeout is None:
         timeout = config.get_settings().llm_timeout_seconds
-    if openai_configured():
-        return OpenAI(api_key=os.getenv("OPENAI_API_KEY"),
-                      base_url=os.getenv("OPENAI_BASE_URL") or None,
-                      timeout=timeout, max_retries=max_retries)
-    if gemini_configured():
-        return OpenAI(api_key=os.getenv("GEMINI_API_KEY"),
-                      base_url=GEMINI_BASE_URL,
-                      timeout=timeout, max_retries=max_retries)
-    raise LLMError("Nenhuma chave de IA configurada "
-                   "(OPENAI_API_KEY/GEMINI_API_KEY).")
+    api_key, base_url = client_settings()
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout,
+                  max_retries=max_retries)
+
+
+def _extras_do_provider() -> dict:
+    """Parametros extra por provider (hoje: modo de raciocinio do DeepSeek).
+
+    Ligar o raciocinio numa traducao de livro multiplica tempo e custo sem
+    ganho proporcional, entao o padrao e desligado.
+    """
+    if provider_name() == "deepseek" and not config.get_settings().deepseek_thinking:
+        return {"thinking": {"type": "disabled"}}
+    return {}
 
 
 # Bits de status HTTP -> explicacao curta para o usuario.
@@ -137,11 +184,13 @@ def _call_once(model: str, system: str, user: str, temperature: float) -> str:
     try:
         cliente = make_client(
             timeout=config.get_settings().llm_timeout_seconds)
+        extras = _extras_do_provider()
         resposta = cliente.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             temperature=temperature,
+            **({"extra_body": extras} if extras else {}),
         )
         conteudo = (resposta.choices[0].message.content or "").strip()
     except LLMError:

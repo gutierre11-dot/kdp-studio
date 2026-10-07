@@ -5,14 +5,55 @@ from backend.app import config, llm
 
 
 def test_provider_offline_sem_chaves(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    for k in ("OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
+              "LLM_PROVIDER"):
+        monkeypatch.delenv(k, raising=False)
     llm.reset_model_cache()
     assert llm.provider_name() == "offline"
     assert not llm.is_configured()
 
 
+def test_deepseek_tem_prioridade_sobre_os_outros(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "chave-deepseek")
+    monkeypatch.setenv("GEMINI_API_KEY", "chave-gemini")
+    monkeypatch.setenv("OPENAI_API_KEY", "chave-openai")
+    assert llm.provider_name() == "deepseek"
+
+
+def test_llm_provider_forca_a_escolha(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "chave-deepseek")
+    monkeypatch.setenv("OPENAI_API_KEY", "chave-openai")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    assert llm.provider_name() == "openai"
+    monkeypatch.setenv("LLM_PROVIDER", "offline")
+    assert llm.provider_name() == "offline"
+
+
+def test_base_url_e_chave_do_deepseek(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "chave-deepseek")
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    chave, base = llm.client_settings()
+    assert chave == "chave-deepseek"
+    assert base == "https://api.deepseek.com"
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://proxy.local/v1")
+    assert llm.client_settings()[1] == "https://proxy.local/v1"
+
+
+def test_modelos_do_deepseek(monkeypatch):
+    monkeypatch.delenv("TRANSLATION_MODEL", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "chave-deepseek")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-flash")
+    config.get_settings.cache_clear()
+    llm.reset_model_cache()
+    assert llm.model_candidates() == ["deepseek-flash", "deepseek-v4-pro"]
+
+
 def test_candidatos_incluem_primario_e_fallbacks(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "chave-gemini")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-flash-latest")
     monkeypatch.delenv("TRANSLATION_MODEL", raising=False)
     config.get_settings.cache_clear()
@@ -55,8 +96,9 @@ def test_chat_esgota_tentativas_e_levanta_llmerror(monkeypatch):
 
 
 def test_chat_offline_levanta_erro_explicito(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    for k in ("OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
+              "LLM_PROVIDER"):
+        monkeypatch.delenv(k, raising=False)
     llm.reset_model_cache()
     with pytest.raises(llm.LLMError, match="chave"):
         llm.chat("s", "u")

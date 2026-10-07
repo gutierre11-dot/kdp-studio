@@ -182,7 +182,7 @@ def configuracao() -> dict:
         "provider": provider_name(),
         "configured": is_configured(),
         "translation_model": candidatos[0] if candidatos else "",
-        "fallback_models": list(settings.fallback_models),
+        "fallback_models": candidatos[1:],
         "max_upload_mb": settings.max_upload_bytes // (1024 * 1024),
         "chunk_chars": settings.translation_chunk_chars,
         "workers": settings.translation_workers,
