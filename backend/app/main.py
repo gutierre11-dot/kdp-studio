@@ -17,6 +17,7 @@ longa, roda em background.
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -216,7 +217,9 @@ async def criar_job(
     modelo = translation_model if translation_model not in (None, "null", "") \
         else None
 
-    temporario = Path(tempfile.mkstemp(suffix=".pdf")[1])
+    descritor, caminho = tempfile.mkstemp(suffix=".pdf")
+    os.close(descritor)  # o fd do mkstemp não é usado; guardá-lo vaza um por upload
+    temporario = Path(caminho)
     try:
         temporario.write_bytes(dados)
         capitulos, avisos = pdf_chapters.build_chapters(
@@ -297,6 +300,9 @@ async def exportar_job(job_id: str, request: Request) -> FileResponse:
     job = store.get(job_id)
     if job is None:
         raise HTTPException(404, f"job {job_id} não encontrado")
+    if job.status == "translating":
+        raise HTTPException(409, f"job {job_id} ainda está sendo traduzido; "
+                                 "aguarde terminar para exportar")
     if job.status in ("error", "cancelled"):
         raise HTTPException(409, f"job {job_id} está '{job.status}': "
                                  "não há conteúdo para exportar")

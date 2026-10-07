@@ -103,3 +103,16 @@ def test_out_path_for_gera_caminho_unico(tmp_path, settings):
     assert primeiro.name.endswith(".epub")
     assert primeiro != segundo
     assert primeiro.parent == tmp_path
+
+
+def test_prune_apaga_artefatos_dos_jobs_removidos(tmp_path, settings):
+    store = JobStore(settings(output_dir=tmp_path, job_ttl_seconds=0))
+    job = store.create(title="t", author="a", language="pt-BR",
+                       source_name="f.pdf", translated=False)
+    arquivo = store.out_path_for(job, "epub")
+    arquivo.write_text("conteudo")
+    job.output_paths.append(arquivo)
+    job.created_at -= 10
+    store.prune()
+    assert store.get(job.id) is None
+    assert not arquivo.exists()

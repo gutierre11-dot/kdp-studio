@@ -90,27 +90,40 @@ class JobStore:
             job = self._jobs.pop(job_id, None)
         if job is None:
             return False
+        self._cleanup(job)
+        return True
+
+    def _cleanup(self, job: JobState) -> None:
+        """Marca o job como cancelado e apaga os arquivos que ele gerou."""
+        job.cancel.set()
         for caminho in job.output_paths:
             try:
                 Path(caminho).unlink(missing_ok=True)
             except OSError:
                 pass
-        return True
 
     def prune(self) -> None:
-        """Remove jobs expirados e limita o total em memoria."""
+        """Remove jobs expirados e limita o total em memoria.
+
+        Os artefatos dos jobs removidos tambem sao apagados: sem isso o
+        diretorio de saida cresceria para sempre e EPUBs expirados continuariam
+        acessiveis por `/download`.
+        """
         agora = time.time()
+        removidos: list[JobState] = []
         with self._lock:
             expirados = [jid for jid, job in self._jobs.items()
                          if agora - job.created_at > self.settings.job_ttl_seconds]
             for jid in expirados:
-                self._jobs.pop(jid, None)
+                removidos.append(self._jobs.pop(jid))
             excesso = len(self._jobs) - self.settings.job_max
             if excesso > 0:
                 mais_antigos = sorted(self._jobs.items(),
                                       key=lambda kv: kv[1].created_at)
-                for jid, _ in mais_antigos[:excesso]:
-                    self._jobs.pop(jid, None)
+                for jid, job in mais_antigos[:excesso]:
+                    removidos.append(self._jobs.pop(jid))
+        for job in removidos:
+            self._cleanup(job)
 
     # -- leitura para a API -----------------------------------------------
     def views(self, job_id: str) -> list[ChapterView]:

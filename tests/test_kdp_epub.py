@@ -127,3 +127,22 @@ def test_falha_de_validacao_nao_cria_destino(tmp_path, monkeypatch):
         build_epub(_caps(), "T", "A", "pt-BR", destino)
     assert not destino.exists()
     assert not list(tmp_path.glob("*.tmp-*"))
+
+
+def test_texto_com_surrogate_nao_trunca_paragrafo(tmp_path):
+    """Caractere inválido em XML não pode fazer o ebooklib engolir o trecho."""
+    caps = [Chapter("T", 1, [Paragraph.from_text("antes \ud800 depois")])]
+    out = build_epub(caps, "T", "A", "pt-BR", tmp_path / "l.epub")
+    with zipfile.ZipFile(out) as zf:
+        xhtml = zf.read("EPUB/cap1.xhtml").decode()
+    assert "antes" in xhtml
+    assert "depois" in xhtml
+
+
+def test_titulo_com_controle_invalido_nao_quebra(tmp_path):
+    caps = [Chapter("Cap\x0cítulo", 1, [Paragraph.from_text("ok")])]
+    out = build_epub(caps, "Li\x0cvro", "Au\x01tor", "pt-BR", tmp_path / "l.epub")
+    validate_epub(out)
+    with zipfile.ZipFile(out) as zf:
+        xhtml = zf.read("EPUB/cap1.xhtml").decode()
+    assert "Cap" in xhtml and "tulo" in xhtml

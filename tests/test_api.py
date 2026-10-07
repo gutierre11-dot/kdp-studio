@@ -177,3 +177,26 @@ def test_spa_servida(client):
     resposta = client.get("/")
     assert resposta.status_code == 200
     assert "text/html" in resposta.headers["content-type"]
+
+
+def test_upload_nao_vaza_file_descriptor(client, pdf_bytes):
+    """O fd do mkstemp precisa ser fechado, senao vaza um por upload."""
+    import os
+
+    def abertos() -> int:
+        return len(os.listdir("/proc/self/fd"))
+
+    antes = abertos()
+    for _ in range(5):
+        assert _criar(client, pdf_bytes).status_code == 201
+    depois = abertos()
+    assert depois <= antes + 3, f"fds: {antes} -> {depois}"
+
+
+def test_export_bloqueado_durante_traducao(client, pdf_bytes):
+    job_id = _criar(client, pdf_bytes).json()["job_id"]
+    main.store.update(job_id, status="translating")
+    resposta = client.post(f"/api/jobs/{job_id}/export", json={})
+    assert resposta.status_code == 409
+    assert "traduzido" in resposta.json()["detail"] or \
+           "traduzindo" in resposta.json()["detail"]

@@ -19,9 +19,22 @@ from .models import Chapter, Paragraph, Run
 _OBRIGATORIOS = ("META-INF/container.xml", "EPUB/content.opf",
                  "EPUB/nav.xhtml", "EPUB/toc.ncx")
 
+# Caracteres que o XML 1.0 nao aceita: controles C0 (exceto tab/LF/CR),
+# surrogates soltos e os nao-caracteres FFFE/FFFF. Sem essa limpeza, o parser
+# do ebooklib engole o documento inteiro e o paragrafo sai truncado.
+_XML_INVALIDO = re.compile(
+    "[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
 
 class EpubValidationError(RuntimeError):
     """O EPUB gerado nao passou na verificacao de integridade."""
+
+
+def sanitize_text(valor: object) -> str:
+    """Remove caracteres invalidos em XML 1.0 de um texto qualquer."""
+    if valor is None:
+        return ""
+    return _XML_INVALIDO.sub("", str(valor))
 
 # CSS de leitura KDP: serif, justificado, recuo de primeira linha, quebra de
 # pagina nos titulos de capitulo e controle de viuvas/orfas.
@@ -40,7 +53,7 @@ p.noindent, h1 + p, h2 + p, h3 + p { text-indent: 0; }
 
 
 def _esc(valor: object) -> str:
-    return html.escape("" if valor is None else str(valor))
+    return html.escape(sanitize_text(valor))
 
 
 def _runs_html(paragrafo: Paragraph) -> str:
@@ -125,11 +138,14 @@ def _write_epub_file(chapters: list[Chapter], title: str, author: str,
     destino.parent.mkdir(parents=True, exist_ok=True)
 
     livro = epub.EpubBook()
-    ident = f"{title or 'livro'}|{author or 'autor'}"
+    titulo_limpo = sanitize_text(title) or "Sem título"
+    autor_limpo = sanitize_text(author) or "Autor Desconhecido"
+    idioma_limpo = sanitize_text(language) or "pt-BR"
+    ident = f"{titulo_limpo}|{autor_limpo}"
     livro.set_identifier(f"kdp-{uuid.uuid5(uuid.NAMESPACE_DNS, ident).hex[:12]}")
-    livro.set_title(title or "Sem título")
-    livro.set_language(language or "pt-BR")
-    livro.add_author(author or "Autor Desconhecido")
+    livro.set_title(titulo_limpo)
+    livro.set_language(idioma_limpo)
+    livro.add_author(autor_limpo)
 
     estilo = epub.EpubItem(uid="style_kdp", file_name="style/kdp.css",
                            media_type="text/css", content=KDP_CSS.encode())
@@ -147,8 +163,9 @@ def _write_epub_file(chapters: list[Chapter], title: str, author: str,
     itens = []
     pares: list[tuple[int, object]] = []
     for i, capitulo in enumerate(chapters, start=1):
+        titulo_cap = sanitize_text(capitulo.title) or f"Capítulo {i}"
         item = epub.EpubHtml(
-            title=capitulo.title or f"Capítulo {i}",
+            title=titulo_cap,
             file_name=f"cap{i}.xhtml",
             content=chapter_fragment(capitulo),
         )

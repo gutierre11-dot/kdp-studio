@@ -253,3 +253,19 @@ def test_sem_reparo_paragrafo_a_paragrafo_quando_a_cadeia_esta_fora(monkeypatch)
     assert len(chamadas) == 2
     assert [p.text for p in out.paragraphs] == [f"p{i}" for i in range(10)]
     assert avisos
+
+
+def test_cancelamento_funciona_com_todas_as_unidades_em_voo(monkeypatch):
+    """Job curto: todas as unidades sao submetidas antes do cancelamento."""
+    monkeypatch.setattr("backend.app.translate._translate_text",
+                        lambda t, **k: t)
+    evento = threading.Event()
+
+    def prog(p, msg):
+        evento.set()
+
+    chs = [Chapter(f"C{i}", 1, [Paragraph.from_text("abc")]) for i in range(2)]
+    with pytest.raises(CancelledError):
+        translate_chapters(chs, title="L", source_lang="en", target_lang="pt-BR",
+                           model=None, workers=4, chunk_chars=6000,
+                           progress=prog, cancel=evento)

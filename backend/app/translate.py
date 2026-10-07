@@ -322,38 +322,43 @@ def translate_chapters(
         return ci, indices, resultado, locais
 
     n_workers = max(1, int(workers))
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        em_voo: dict[Future, tuple[int, list[int], str]] = {}
-        proximo = 0
-        try:
-            while proximo < total or em_voo:
-                while proximo < total and len(em_voo) < n_workers:
-                    if cancel is not None and cancel.is_set():
-                        raise CancelledError("tradução cancelada")
-                    em_voo[pool.submit(trabalho, *unidades[proximo])] = \
-                        unidades[proximo]
-                    proximo += 1
-                if not em_voo:
-                    break
-                concluidos_agora, _ = wait(em_voo, return_when=FIRST_COMPLETED)
-                for futuro in concluidos_agora:
-                    ci, indices, resultado, locais = futuro.result()
-                    em_voo.pop(futuro, None)
-                    with lock:
-                        concluidos += 1
-                        if indices is None:
-                            titulos[ci] = resultado[0]
-                        else:
-                            for i, trecho in zip(indices, resultado):
-                                traducao[ci].setdefault(i, []).append(trecho)
-                        avisos.extend(locais)
-                        if progress is not None:
-                            progress(int(100 * concluidos / total),
-                                     f"Traduzindo {concluidos}/{total}")
-        except CancelledError:
-            for futuro in em_voo:
-                futuro.cancel()
-            raise
+    pool = ThreadPoolExecutor(max_workers=n_workers)
+    em_voo: dict[Future, tuple[int, list[int] | None, str]] = {}
+    proximo = 0
+    try:
+        while proximo < total or em_voo:
+            # Checado no topo de cada rodada e apos o laco: sem isso, um job
+            # curto cujas unidades ja estao todas em voo ignoraria o
+            # cancelamento e terminaria como "done".
+            if cancel is not None and cancel.is_set():
+                raise CancelledError("tradução cancelada")
+            while proximo < total and len(em_voo) < n_workers:
+                em_voo[pool.submit(trabalho, *unidades[proximo])] = \
+                    unidades[proximo]
+                proximo += 1
+            if not em_voo:
+                break
+            concluidos_agora, _ = wait(em_voo, return_when=FIRST_COMPLETED)
+            for futuro in concluidos_agora:
+                ci, indices, resultado, locais = futuro.result()
+                em_voo.pop(futuro, None)
+                with lock:
+                    concluidos += 1
+                    if indices is None:
+                        titulos[ci] = resultado[0]
+                    else:
+                        for i, trecho in zip(indices, resultado):
+                            traducao[ci].setdefault(i, []).append(trecho)
+                    avisos.extend(locais)
+                    if progress is not None:
+                        progress(int(100 * concluidos / total),
+                                 f"Traduzindo {concluidos}/{total}")
+        if cancel is not None and cancel.is_set():
+            raise CancelledError("tradução cancelada")
+    except CancelledError:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
 
     saida: list[Chapter] = []
     for ci, capitulo in enumerate(chapters):
