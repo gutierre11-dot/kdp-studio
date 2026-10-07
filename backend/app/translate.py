@@ -1,0 +1,197 @@
+"""Traducao de capitulos em lote via LLM.
+
+Divide cada capitulo em blocos de ~`chunk_chars`, cortando em fronteira de
+paragrafo, e **valida a estrutura**: o numero de paragrafos do resultado tem de
+bater com o da entrada. Quando o modelo desalinha, o bloco e refeito paragrafo
+a paragrafo — nunca se perde texto em silencio, nem se aceita um resultado com
+a estrutura errada.
+"""
+from __future__ import annotations
+
+import re
+from typing import Callable
+
+from . import llm
+from .models import Chapter, Paragraph
+
+DEFAULT_TARGET_LANG = "pt-BR"
+DEFAULT_SOURCE_LANG = "auto"
+
+# Nomes legiveis para o prompt (sem acento: o modelo entende igual).
+LANG_NAMES = {
+    "pt": "portugues",
+    "pt-br": "portugues brasileiro",
+    "pt-pt": "portugues europeu",
+    "en": "ingles",
+    "es": "espanhol",
+    "fr": "frances",
+    "de": "alemao",
+    "it": "italiano",
+    "nl": "holandes",
+    "ja": "japones",
+    "zh": "chines",
+    "ru": "russo",
+}
+
+# Fronteiras preferenciais de corte, da melhor para a pior.
+_BOUNDARIES = (r"\n\n", r"(?<=[.!?\u2026])\s", r"\s")
+
+
+def lang_name(code: str | None) -> str:
+    """Nome legivel do idioma; devolve o proprio codigo se desconhecido."""
+    if not code:
+        return ""
+    return LANG_NAMES.get(str(code).strip().lower(), str(code).strip())
+
+
+def split_chunks(text: str, limit: int) -> list[str]:
+    """Divide `text` em blocos de ate `limit` caracteres, sem perder nada.
+
+    O corte e feito em fim de paragrafo, depois em fim de frase e por ultimo em
+    espaco; nenhum caractere aparece em dois blocos.
+    """
+    if limit <= 0:
+        raise ValueError("limit deve ser positivo")
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    inicio = 0
+    total = len(text)
+    while inicio < total:
+        fim = min(inicio + limit, total)
+        if fim < total:
+            janela = text[inicio:fim]
+            corte = 0
+            for padrao in _BOUNDARIES:
+                achados = list(re.finditer(padrao, janela))
+                if achados:
+                    corte = achados[-1].end()
+                    break
+            if corte > len(janela) * 0.5:
+                fim = inicio + corte
+        if fim <= inicio:  # seguranca: sempre avanca
+            fim = min(inicio + limit, total)
+        chunks.append(text[inicio:fim])
+        inicio = fim
+    return chunks
+
+
+def build_system_prompt(source_lang: str | None = None,
+                        target_lang: str | None = None, *,
+                        title: str = "", chapter_title: str = "") -> str:
+    """Prompt de traducao literaria para o par de idiomas informado."""
+    destino = lang_name(target_lang) or lang_name(DEFAULT_TARGET_LANG)
+    origem = lang_name(source_lang)
+    partes = ["Você é um tradutor literário profissional."]
+    if origem and str(source_lang or "").strip().lower() != "auto":
+        partes.append(f"O texto de origem está em {origem}.")
+    partes.append(f"Traduza o texto a seguir para {destino}, preservando nomes "
+                  "próprios, tom literário e formatação.")
+    partes.append("Mantenha EXATAMENTE a mesma quantidade de parágrafos, "
+                  "separados por uma linha em branco.")
+    partes.append("Retorne APENAS a tradução, sem comentários, títulos ou notas.")
+    contexto = []
+    if title:
+        contexto.append(f"Livro: {title}.")
+    if chapter_title:
+        contexto.append(f"Capítulo: {chapter_title}.")
+    if contexto:
+        partes.append(" ".join(contexto))
+    return " ".join(partes)
+
+
+def _translate_text(text: str, *, system: str,
+                    model: str | None = None) -> str:
+    """Ponto unico de chamada ao LLM (isolado para facilitar teste)."""
+    return llm.chat(system, text, model=model)
+
+
+def _traduzir_um(texto: str, sistema: str, model: str | None,
+                 warn: Callable[[str], None], contexto: str) -> str:
+    """Traduz um unico paragrafo (ou pedaco de paragrafo gigante)."""
+    if not texto.strip():
+        return texto
+    try:
+        saida = _translate_text(texto, system=sistema, model=model)
+    except llm.LLMError as exc:
+        warn(f"Capítulo {contexto!r}: trecho mantido no idioma original ({exc}).")
+        return texto
+    partes = [p.strip() for p in saida.split("\n\n") if p.strip()]
+    return " ".join(partes) or texto
+
+
+def _traduzir_bloco(texto: str, esperados: int, sistema: str,
+                    model: str | None, warn: Callable[[str], None],
+                    contexto: str) -> list[str]:
+    """Traduz um bloco de N paragrafos, garantindo N paragrafos na saida."""
+    if esperados <= 1:
+        return [_traduzir_um(texto, sistema, model, warn, contexto)]
+    saida: str | None = None
+    try:
+        saida = _translate_text(texto, system=sistema, model=model)
+    except llm.LLMError as exc:
+        warn(f"Capítulo {contexto!r}: falha na tradução em lote ({exc}); "
+             "refazendo parágrafo a parágrafo.")
+    if saida is not None:
+        novos = [p for p in saida.split("\n\n") if p.strip()]
+        if len(novos) == esperados:
+            return novos
+        warn(f"Capítulo {contexto!r}: o modelo desalinhou os parágrafos; "
+             "refazendo parágrafo a parágrafo.")
+    return [_traduzir_um(p, sistema, model, warn, contexto)
+            for p in texto.split("\n\n")]
+
+
+def montar_unidades(paragrafos: list[str],
+                    limite: int) -> list[tuple[list[int], str]]:
+    """Agrupa paragrafos em blocos de ate `limite` caracteres.
+
+    Um paragrafo sozinho maior que o limite e dividido por `split_chunks`; todos
+    os pedacos apontam para o mesmo indice e sao reunidos depois.
+    """
+    unidades: list[tuple[list[int], str]] = []
+    indices: list[int] = []
+    textos: list[str] = []
+    for i, paragrafo in enumerate(paragrafos):
+        if len(paragrafo) > limite:
+            if indices:
+                unidades.append((indices, "\n\n".join(textos)))
+                indices, textos = [], []
+            unidades.extend(([i], parte)
+                            for parte in split_chunks(paragrafo, limite))
+            continue
+        candidato = "\n\n".join(textos + [paragrafo])
+        if indices and len(candidato) > limite:
+            unidades.append((indices, "\n\n".join(textos)))
+            indices, textos = [i], [paragrafo]
+        else:
+            indices.append(i)
+            textos.append(paragrafo)
+    if indices:
+        unidades.append((indices, "\n\n".join(textos)))
+    return unidades
+
+
+def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
+                      target_lang: str, model: str | None, chunk_chars: int,
+                      warn: Callable[[str], None]) -> Chapter:
+    """Traduz um capitulo preservando a contagem de paragrafos."""
+    paragrafos = [p.text for p in chapter.paragraphs]
+    if not paragrafos:
+        return Chapter(chapter.title, chapter.level, [])
+    sistema = build_system_prompt(source_lang, target_lang, title=title,
+                                  chapter_title=chapter.title)
+
+    por_indice: dict[int, list[str]] = {}
+    for indices, texto in montar_unidades(paragrafos, chunk_chars):
+        traduzidos = _traduzir_bloco(texto, len(indices), sistema, model,
+                                     warn, chapter.title)
+        for i, trecho in zip(indices, traduzidos):
+            por_indice.setdefault(i, []).append(trecho)
+
+    novos: list[str] = []
+    for i, original in enumerate(paragrafos):
+        partes = [p.strip() for p in por_indice.get(i, []) if p.strip()]
+        novos.append(" ".join(partes) if partes else original)
+    return Chapter(chapter.title, chapter.level,
+                   [Paragraph.from_text(t) for t in novos])
