@@ -233,3 +233,23 @@ def test_traducao_totalmente_falha_levanta_erro(monkeypatch):
     with pytest.raises(LLMError, match="não produziu"):
         translate_chapters(chs, title="L", source_lang="en", target_lang="pt-BR",
                            model=None, workers=1, chunk_chars=6000)
+
+
+def test_sem_reparo_paragrafo_a_paragrafo_quando_a_cadeia_esta_fora(monkeypatch):
+    """Com a cadeia de modelos fora, nao se gastam N chamadas condenadas."""
+    chamadas = []
+
+    def fake(text, **k):
+        chamadas.append(text)
+        raise LLMError("503")
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    avisos = []
+    capitulo = Chapter("T", 1, [Paragraph.from_text(f"p{i}") for i in range(10)])
+    out = translate_chapter(capitulo, title="L", source_lang="en",
+                            target_lang="pt-BR", model=None, chunk_chars=6000,
+                            warn=avisos.append)
+    # 1 chamada para o titulo + 1 para o lote; nenhuma por paragrafo
+    assert len(chamadas) == 2
+    assert [p.text for p in out.paragraphs] == [f"p{i}" for i in range(10)]
+    assert avisos

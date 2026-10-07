@@ -191,18 +191,18 @@ def _traduzir_bloco(texto: str, esperados: int, sistema: str,
     """Traduz um bloco de N paragrafos, garantindo N paragrafos na saida."""
     if esperados <= 1:
         return [_traduzir_um(texto, sistema, model, warn, contexto)]
-    saida: str | None = None
     try:
         saida = _translate_text(texto, system=sistema, model=model)
     except llm.LLMError as exc:
-        warn(f"Capítulo {contexto!r}: falha na tradução em lote ({exc}); "
-             "refazendo parágrafo a parágrafo.")
-    if saida is not None:
-        novos = [p for p in saida.split("\n\n") if p.strip()]
-        if len(novos) == esperados:
-            return novos
-        warn(f"Capítulo {contexto!r}: o modelo desalinhou os parágrafos; "
-             "refazendo parágrafo a parágrafo.")
+        # Cadeia de modelos fora: insistir paragrafo a paragrafo gastaria N
+        # chamadas ja condenadas (cada uma com timeout). Mantem o original.
+        warn(f"Capítulo {contexto!r}: trecho mantido no idioma original ({exc}).")
+        return list(texto.split("\n\n"))
+    novos = [p for p in saida.split("\n\n") if p.strip()]
+    if len(novos) == esperados:
+        return novos
+    warn(f"Capítulo {contexto!r}: o modelo desalinhou os parágrafos; "
+         "refazendo parágrafo a parágrafo.")
     return [_traduzir_um(p, sistema, model, warn, contexto)
             for p in texto.split("\n\n")]
 
