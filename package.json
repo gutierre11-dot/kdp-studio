@@ -1,0 +1,12 @@
+{
+  "name": "kdp-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Atalhos npm para o KDP Studio (o backend é Python/FastAPI — não há dependências Node).",
+  "scripts": {
+    "dev": "bash run.sh",
+    "start": "RELOAD=0 bash run.sh",
+    "test": "python3 -m pytest -q",
+    "check": "python3 -m py_compile backend/app/*.py && node --check static/app.js"
+  }
+}

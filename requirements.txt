@@ -1,0 +1,3 @@
+# KDP Studio — a lista canônica vive em backend/requirements.txt.
+# Este arquivo apenas a referencia para evitar divergência entre as duas cópias.
+-r backend/requirements.txt
