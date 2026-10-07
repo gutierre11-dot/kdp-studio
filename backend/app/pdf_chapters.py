@@ -11,7 +11,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 
-from .models import Anchor, Line
+from .models import Anchor, Line, Paragraph, Run
 from .pdf_extract import extract_lines
 
 # Similaridade minima entre titulo do outline e texto da linha para ancorar.
@@ -177,7 +177,180 @@ __all__ = [
     "SIMILARITY_MIN",
     "anchor_outline",
     "detect_headings",
+    "is_page_number",
+    "join_paragraphs",
     "modal_body_size",
     "normalize",
     "outline_coverage",
+    "remove_running_lines",
 ]
+
+# ---------------------------------------------------------------------------
+# Limpeza e juncao de paragrafos
+# ---------------------------------------------------------------------------
+
+_PAGE_NUM_RE = re.compile(
+    r"^(?:\d{1,4}|[ivxlcdm]{1,7}|p[áa]g(?:ina)?\.?\s*\d+)$", re.IGNORECASE)
+
+_JUNK_RE = re.compile(
+    r"^(?:www\.|https?://|\S+@\S+|isbn\b|©|copyright\b|"
+    r"todos os direitos reservados)",
+    re.IGNORECASE,
+)
+
+_HEADER_BAND = 0.06
+_FOOTER_BAND = 0.93
+_MAX_RUNNING_LEN = 110
+_MIN_RUNNING_PAGES = 3
+
+
+def is_page_number(text: str) -> bool:
+    """Numeracao de pagina isolada (arabica, romana ou 'Pagina N')."""
+    return bool(_PAGE_NUM_RE.match((text or "").strip()))
+
+
+def _banda(linha: Line) -> str:
+    if linha.bbox[1] < _HEADER_BAND * linha.page_height:
+        return "top"
+    if linha.bbox[3] > _FOOTER_BAND * linha.page_height:
+        return "bot"
+    return "mid"
+
+
+def remove_running_lines(lines: list[Line], keep: set[int], *,
+                         remove_header: bool,
+                         remove_page_numbers: bool) -> list[Line]:
+    """Remove cabecalho/rodape repetidos, numeracao e linhas de junk.
+
+    Cabecalhos sao detectados por banda (topo/rodape) + repeticao em paginas
+    distintas, o que pega tirulos correntes que mudam de texto a cada capitulo.
+    Indices em `keep` (as ancoras do outline) nunca sao removidos.
+    """
+    exatas: dict[tuple[str, str], set[int]] = defaultdict(set)
+    mascaras: dict[tuple[str, str], set[int]] = defaultdict(set)
+    for linha in lines:
+        faixa = _banda(linha)
+        if faixa == "mid" or len(linha.text) >= _MAX_RUNNING_LEN:
+            continue
+        base = normalize(linha.text)
+        if not base:
+            continue
+        exatas[(faixa, base)].add(linha.page)
+        mascaras[(faixa, re.sub(r"\d+", "#", base))].add(linha.page)
+
+    def repetida(linha: Line) -> bool:
+        faixa = _banda(linha)
+        if faixa == "mid" or len(linha.text) >= _MAX_RUNNING_LEN:
+            return False
+        base = normalize(linha.text)
+        return (len(exatas.get((faixa, base), ())) >= _MIN_RUNNING_PAGES
+                or len(mascaras.get((faixa, re.sub(r"\d+", "#", base)), ()))
+                >= _MIN_RUNNING_PAGES)
+
+    saida: list[Line] = []
+    for i, linha in enumerate(lines):
+        texto = linha.text.strip()
+        if not texto:
+            continue
+        if i in keep:
+            saida.append(linha)
+            continue
+        if remove_page_numbers and is_page_number(texto):
+            continue
+        if len(texto) <= 120 and _JUNK_RE.match(texto):
+            continue
+        if remove_header and repetida(linha):
+            continue
+        saida.append(linha)
+    return saida
+
+
+def _largura(linha: Line) -> float:
+    return max(0.0, float(linha.bbox[2]) - float(linha.bbox[0]))
+
+
+def _runs_da_linha(linha: Line) -> list[Run]:
+    origem = list(linha.runs) if linha.runs else [Run(linha.text)]
+    limpos: list[Run] = []
+    for run in origem:
+        texto = re.sub(r"\s+", " ", (run.text or "").replace("\u00ad", ""))
+        limpos.append(Run(texto, italic=run.italic, bold=run.bold))
+    if limpos:
+        limpos[0].text = limpos[0].text.lstrip()
+        limpos[-1].text = limpos[-1].text.rstrip()
+    return [r for r in limpos if r.text]
+
+
+def _sem_espaco_final(runs: list[Run]) -> None:
+    while runs and not runs[-1].text:
+        runs.pop()
+    if runs:
+        runs[-1].text = runs[-1].text.rstrip()
+
+
+def _sem_espaco_inicial(runs: list[Run]) -> None:
+    while runs and not runs[0].text:
+        runs.pop(0)
+    if runs:
+        runs[0].text = runs[0].text.lstrip()
+
+
+def _juntar_runs(destino: list[Run], novas: list[Run], separador: str) -> None:
+    _sem_espaco_final(destino)
+    _sem_espaco_inicial(novas)
+    if not novas:
+        return
+    if destino and separador:
+        destino.append(Run(separador))
+    destino.extend(novas)
+
+
+def _tirar_hifen_final(runs: list[Run]) -> None:
+    if runs and runs[-1].text.endswith("-"):
+        runs[-1].text = runs[-1].text[:-1]
+
+
+def _continua_paragrafo(prev: Line, cur: Line, largura_max: float) -> bool:
+    """Decide se `cur` continua o paragrafo iniciado em `prev`."""
+    if abs(prev.size - cur.size) > 0.5 or prev.bold != cur.bold:
+        return False
+    if cur.page == prev.page:
+        gap = float(cur.bbox[1]) - float(prev.bbox[3])
+        if gap < -2 or gap > max(1.8 * cur.size, 6.0):
+            return False
+    larga = largura_max > 0 and _largura(prev) >= 0.8 * largura_max
+    return larga or prev.text.rstrip().endswith("-")
+
+
+def join_paragraphs(lines: list[Line]) -> list[Paragraph]:
+    """Transforma linhas em paragrafos, atravessando paginas.
+
+    Uma linha continua a anterior quando tem a mesma fonte, esta logo abaixo e
+    ocupa quase toda a largura da coluna (sinal de que a frase continua). Na
+    virada de pagina a checagem de espaco vertical e ignorada, porque o gap
+    entre paginas nao tem significado.
+    """
+    larguras: dict[float, float] = {}
+    for linha in lines:
+        chave = round(linha.size, 1)
+        larguras[chave] = max(larguras.get(chave, 0.0), _largura(linha))
+
+    paragrafos: list[Paragraph] = []
+    ultima: Line | None = None
+    for linha in lines:
+        novas = _runs_da_linha(linha)
+        if not novas:
+            continue
+        largura_max = larguras.get(round(linha.size, 1), 0.0)
+        if ultima is not None and _continua_paragrafo(ultima, linha, largura_max):
+            primeiro = novas[0].text
+            if (paragrafos[-1].text.endswith("-") and primeiro[:1].islower()
+                    and primeiro[:1].isascii()):
+                _tirar_hifen_final(paragrafos[-1].runs)
+                _juntar_runs(paragrafos[-1].runs, novas, "")
+            else:
+                _juntar_runs(paragrafos[-1].runs, novas, " ")
+        else:
+            paragrafos.append(Paragraph(runs=novas))
+        ultima = linha
+    return paragrafos

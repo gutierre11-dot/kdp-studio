@@ -3,8 +3,11 @@ from backend.app.models import Line
 from backend.app.pdf_chapters import (
     anchor_outline,
     detect_headings,
+    is_page_number,
+    join_paragraphs,
     modal_body_size,
     normalize,
+    remove_running_lines,
 )
 
 
@@ -85,3 +88,60 @@ def test_heuristica_detecta_subtitulo_bold_pequeno():
               _linha(0, "corpo do texto.", 10.0, 120)]
     det = detect_headings(linhas, 10.0)
     assert det and det[0][1] == 2
+
+
+def test_is_page_number_reconhece_formatos():
+    assert is_page_number("42")
+    assert is_page_number(" xii ")
+    assert is_page_number("Página 7")
+    assert not is_page_number("O ano de 1842 foi decisivo")
+    assert not is_page_number("Capítulo 42")
+
+
+def test_remove_cabecalho_repetido_por_banda():
+    linhas = [_linha(p, "Capítulo Um ■ Quadro geral", 10.0, 20, h=800.0)
+              for p in range(4)]
+    linhas += [_linha(p, "corpo", 10.0, 400, h=800.0) for p in range(4)]
+    out = remove_running_lines(linhas, keep=set(), remove_header=True,
+                               remove_page_numbers=True)
+    assert [l.text for l in out] == ["corpo"] * 4
+
+
+def test_ancora_nunca_e_removida():
+    linhas = [_linha(p, "Capítulo Um", 10.0, 20, h=800.0) for p in range(4)]
+    out = remove_running_lines(linhas, keep={0}, remove_header=True,
+                               remove_page_numbers=True)
+    assert len(out) == 1
+    assert out[0].text == "Capítulo Um"
+
+
+def test_toggles_desligados_preservam_tudo():
+    linhas = [_linha(p, "42", 10.0, 780, h=800.0) for p in range(4)]
+    out = remove_running_lines(linhas, keep=set(), remove_header=False,
+                               remove_page_numbers=False)
+    assert len(out) == 4
+
+
+def test_des_hifeniza_palavra_quebrada():
+    linhas = [_linha(0, "transfor-", 10.0, 100),
+              _linha(0, "macao social", 10.0, 112)]
+    paras = join_paragraphs(linhas)
+    assert paras[0].text == "transformacao social"
+
+
+def test_remove_soft_hyphen():
+    linhas = [_linha(0, "trans\u00adformação", 10.0, 100)]
+    assert join_paragraphs(linhas)[0].text == "transformação"
+
+
+def test_junta_paragrafo_entre_paginas():
+    linhas = [_linha(0, "primeira parte", 10.0, 700, h=800.0),
+              _linha(1, "segunda parte.", 10.0, 60, h=800.0)]
+    assert join_paragraphs(linhas)[0].text == "primeira parte segunda parte."
+
+
+def test_separa_paragrafos_por_espaco_vertical():
+    linhas = [_linha(0, "um parágrafo.", 10.0, 100),
+              _linha(0, "outro parágrafo.", 10.0, 200)]
+    assert [p.text for p in join_paragraphs(linhas)] == ["um parágrafo.",
+                                                         "outro parágrafo."]
