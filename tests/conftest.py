@@ -84,3 +84,22 @@ PAGES_3 = [
      "Tudo veio à tona durante a tempestade, entre relâmpagos e silêncios "
      "que ninguém ousava quebrar."),
 ]
+
+
+@pytest.fixture
+def make_bookmark_pdf(tmp_path):
+    """PDF de 2 páginas cujos títulos têm bookmarks correspondentes."""
+    import pymupdf
+
+    doc = pymupdf.open()
+    for titulo, corpo in (("Capítulo Um", "primeiro corpo do texto"),
+                          ("Capítulo Dois", "segundo corpo do texto")):
+        page = doc.new_page()
+        page.insert_text((72, 90), titulo, fontsize=20, fontname="helv")
+        page.insert_text((72, 150), corpo, fontsize=12, fontname="helv")
+    doc.set_toc([[1, "Capítulo Um", 1], [1, "Capítulo Dois", 2]])
+    out = tmp_path / "bookmarks.pdf"
+    doc.save(str(out))
+    doc.close()
+    return out
+
