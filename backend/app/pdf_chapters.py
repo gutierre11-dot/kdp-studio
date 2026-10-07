@@ -11,7 +11,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 
-from .models import Anchor, Line, Paragraph, Run
+from .models import Anchor, Chapter, Line, Paragraph, Run
 from .pdf_extract import extract_lines
 
 # Similaridade minima entre titulo do outline e texto da linha para ancorar.
@@ -176,6 +176,9 @@ __all__ = [
     "REANCHOR_MIN",
     "SIMILARITY_MIN",
     "anchor_outline",
+    "assemble_chapters",
+    "build_chapters",
+    "cleaning_mask",
     "detect_headings",
     "is_page_number",
     "join_paragraphs",
@@ -183,6 +186,7 @@ __all__ = [
     "normalize",
     "outline_coverage",
     "remove_running_lines",
+    "sanitize",
 ]
 
 # ---------------------------------------------------------------------------
@@ -217,14 +221,13 @@ def _banda(linha: Line) -> str:
     return "mid"
 
 
-def remove_running_lines(lines: list[Line], keep: set[int], *,
-                         remove_header: bool,
-                         remove_page_numbers: bool) -> list[Line]:
-    """Remove cabecalho/rodape repetidos, numeracao e linhas de junk.
+def cleaning_mask(lines: list[Line], keep: set[int], *,
+                  remove_header: bool,
+                  remove_page_numbers: bool) -> list[bool]:
+    """Mascara de linhas que sobrevivem a limpeza (mesma ordem de `lines`).
 
-    Cabecalhos sao detectados por banda (topo/rodape) + repeticao em paginas
-    distintas, o que pega tirulos correntes que mudam de texto a cada capitulo.
-    Indices em `keep` (as ancoras do outline) nunca sao removidos.
+    Exposta porque `build_chapters` precisa remapear os indices das ancoras do
+    outline apos o filtro.
     """
     exatas: dict[tuple[str, str], set[int]] = defaultdict(set)
     mascaras: dict[tuple[str, str], set[int]] = defaultdict(set)
@@ -247,22 +250,40 @@ def remove_running_lines(lines: list[Line], keep: set[int], *,
                 or len(mascaras.get((faixa, re.sub(r"\d+", "#", base)), ()))
                 >= _MIN_RUNNING_PAGES)
 
-    saida: list[Line] = []
+    manter: list[bool] = []
     for i, linha in enumerate(lines):
         texto = linha.text.strip()
         if not texto:
+            manter.append(False)
             continue
         if i in keep:
-            saida.append(linha)
+            manter.append(True)
             continue
         if remove_page_numbers and is_page_number(texto):
+            manter.append(False)
             continue
         if len(texto) <= 120 and _JUNK_RE.match(texto):
+            manter.append(False)
             continue
         if remove_header and repetida(linha):
+            manter.append(False)
             continue
-        saida.append(linha)
-    return saida
+        manter.append(True)
+    return manter
+
+
+def remove_running_lines(lines: list[Line], keep: set[int], *,
+                         remove_header: bool,
+                         remove_page_numbers: bool) -> list[Line]:
+    """Remove cabecalho/rodape repetidos, numeracao e linhas de junk.
+
+    Cabecalhos sao detectados por banda (topo/rodape) + repeticao em paginas
+    distintas, o que pega titulos correntes que mudam de texto a cada capitulo.
+    Indices em `keep` (as ancoras do outline) nunca sao removidos.
+    """
+    manter = cleaning_mask(lines, keep, remove_header=remove_header,
+                           remove_page_numbers=remove_page_numbers)
+    return [linha for linha, fica in zip(lines, manter) if fica]
 
 
 def _largura(linha: Line) -> float:
@@ -354,3 +375,106 @@ def join_paragraphs(lines: list[Line]) -> list[Paragraph]:
             paragrafos.append(Paragraph(runs=novas))
         ultima = linha
     return paragrafos
+
+
+# ---------------------------------------------------------------------------
+# Montagem, sanidade e entrada publica
+# ---------------------------------------------------------------------------
+
+_MAX_NIVEL1 = 60
+
+
+def assemble_chapters(lines: list[Line], anchors: list[Anchor]) -> list[Chapter]:
+    """Fatia o fluxo de linhas entre ancoras consecutivas.
+
+    A linha da ancora vira o titulo do capitulo e nao entra no corpo.
+    """
+    if not anchors:
+        paragrafos = join_paragraphs(lines)
+        return [Chapter("Conteúdo", 1, paragrafos)] if paragrafos else []
+    ordem = sorted(anchors, key=lambda a: a[0])
+    capitulos: list[Chapter] = []
+    for pos, (indice, nivel, titulo) in enumerate(ordem):
+        fim = ordem[pos + 1][0] if pos + 1 < len(ordem) else len(lines)
+        corpo = lines[indice + 1:fim]
+        capitulos.append(Chapter(titulo, min(max(int(nivel), 1), 3),
+                                 join_paragraphs(corpo)))
+    return capitulos
+
+
+def _agrupar_ate(chapters: list[Chapter], limite: int) -> list[Chapter]:
+    """Junta capitulos consecutivos em no maximo `limite` grupos."""
+    if limite <= 0 or len(chapters) <= limite:
+        return chapters
+    passo = -(-len(chapters) // limite)  # teto da divisao
+    agrupados: list[Chapter] = []
+    for i in range(0, len(chapters), passo):
+        grupo = chapters[i:i + passo]
+        agrupados.append(Chapter(
+            grupo[0].title,
+            min(c.level for c in grupo),
+            [p for c in grupo for p in c.paragraphs],
+        ))
+    return agrupados
+
+
+def sanitize(chapters: list[Chapter],
+             pages: int) -> tuple[list[Chapter], list[str]]:
+    """Descarta capitulos vazios e degrada quando a deteccao explode.
+
+    A degradacao so dispara por contagem absurda de capitulos: um livro real
+    tem muito menos titulos do que paginas. Isso evita entregar um EPUB com
+    centenas de "capitulos" gerados por um PDF que confundiu cabecalho com
+    titulo.
+    """
+    avisos: list[str] = []
+    vazios = [c for c in chapters if not c.paragraphs]
+    validos = [c for c in chapters if c.paragraphs]
+    if vazios:
+        avisos.append(f"{len(vazios)} capítulo(s) sem conteúdo foram descartados.")
+    if not validos:
+        return [], ["Nenhum conteúdo extraído do PDF."]
+    nivel1 = [c for c in validos if c.level == 1]
+    limite = max(50.0, (pages or 1) / 1.5)
+    if len(nivel1) > _MAX_NIVEL1 or len(validos) > limite:
+        avisos.append("Detecção instável; usada a estratégia conservadora.")
+        if nivel1 and len(nivel1) != len(validos):
+            validos = nivel1
+        validos = _agrupar_ate(validos, max(1, int(pages or 1)))
+    return validos, avisos
+
+
+def build_chapters(pdf_path, *, remove_header: bool = True,
+                   remove_page_numbers: bool = True
+                   ) -> tuple[list[Chapter], list[str]]:
+    """Pipeline completo: PDF -> capitulos + avisos para o usuario."""
+    lines, pages, outline = extract_lines(pdf_path)
+    if not lines:
+        return [Chapter("Texto", 1, [])], ["PDF sem texto extraível."]
+
+    body_size = modal_body_size(lines)
+    anchors: list[Anchor] = []
+    avisos: list[str] = []
+    if outline:
+        anchors = anchor_outline(lines, outline, body_size)
+    if not anchors or outline_coverage(anchors, outline) < ANCHOR_COVERAGE_MIN:
+        anchors = detect_headings(lines, body_size)
+        avisos.append("PDF sem sumário embutido: capítulos detectados por "
+                      "heurística de fontes.")
+
+    keep = {indice for indice, _, _ in anchors}
+    manter = cleaning_mask(lines, keep, remove_header=remove_header,
+                           remove_page_numbers=remove_page_numbers)
+    limpas = [linha for linha, fica in zip(lines, manter) if fica]
+
+    novo_indice: dict[int, int] = {}
+    for antigo, fica in enumerate(manter):
+        if fica:
+            novo_indice[antigo] = len(novo_indice)
+    anchors_limpos: list[Anchor] = [(novo_indice[i], nivel, titulo)
+                                    for i, nivel, titulo in anchors
+                                    if i in novo_indice]
+
+    capitulos = assemble_chapters(limpas, anchors_limpos)
+    capitulos, avisos_sanidade = sanitize(capitulos, pages)
+    return capitulos, avisos + avisos_sanidade

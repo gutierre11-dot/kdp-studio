@@ -1,13 +1,16 @@
 """Testes da deteccao de capitulos a partir do PDF."""
-from backend.app.models import Line
+from backend.app.models import Chapter, Line, Paragraph
 from backend.app.pdf_chapters import (
     anchor_outline,
+    assemble_chapters,
+    build_chapters,
     detect_headings,
     is_page_number,
     join_paragraphs,
     modal_body_size,
     normalize,
     remove_running_lines,
+    sanitize,
 )
 
 
@@ -145,3 +148,45 @@ def test_separa_paragrafos_por_espaco_vertical():
               _linha(0, "outro parágrafo.", 10.0, 200)]
     assert [p.text for p in join_paragraphs(linhas)] == ["um parágrafo.",
                                                          "outro parágrafo."]
+
+
+def test_assemble_fatia_entre_ancoras():
+    linhas = [_linha(0, "Cap A", 20.0, 40), _linha(0, "texto A", 10.0, 100),
+              _linha(0, "Cap B", 20.0, 200), _linha(0, "texto B", 10.0, 260)]
+    chs = assemble_chapters(linhas, [(0, 1, "Cap A"), (2, 1, "Cap B")])
+    assert [(c.title, c.level, [p.text for p in c.paragraphs])
+            for c in chs] == [("Cap A", 1, ["texto A"]),
+                              ("Cap B", 1, ["texto B"])]
+
+
+def test_sanitize_descarta_capitulo_vazio_com_aviso():
+    chs = [Chapter("Vazio", 1, []),
+           Chapter("Cheio", 1, [Paragraph.from_text("x")])]
+    out, avisos = sanitize(chs, pages=10)
+    assert [c.title for c in out] == ["Cheio"]
+    assert avisos
+
+
+def test_sanitize_degrada_quando_explode_a_contagem():
+    chs = [Chapter(f"C{i}", 1, [Paragraph.from_text("x")]) for i in range(200)]
+    out, avisos = sanitize(chs, pages=20)
+    assert len(out) <= 20
+    assert any("conservadora" in a for a in avisos)
+
+
+def test_build_chapters_pdf_sem_texto(tmp_path):
+    import pymupdf
+
+    p = tmp_path / "vazio.pdf"
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.save(str(p))
+    doc.close()
+    chs, avisos = build_chapters(p)
+    assert len(chs) == 1
+    assert "sem texto" in " ".join(avisos).lower()
+
+
+def test_build_chapters_usa_outline(make_bookmark_pdf):
+    chs, _ = build_chapters(make_bookmark_pdf)
+    assert [c.title for c in chs] == ["Capítulo Um", "Capítulo Dois"]
