@@ -15,11 +15,19 @@ if str(ROOT) not in sys.path:
 def offline(monkeypatch):
     """Impede que os testes chamem APIs de LLM reais (custo/rede).
 
-    Forca o modo offline em todos os modulos que consultam provider.
+    Forca o modo offline em todos os modulos que consultam provider e torna
+    qualquer chamada de rede um erro explicito em vez de uma requisicao.
     """
-    monkeypatch.setattr("backend.app.translator.llm_available", lambda: False)
-    monkeypatch.setattr("backend.app.creator.llm_available", lambda: False)
-    monkeypatch.setattr("backend.app.cover.openai_configured", lambda: False)
+    def _sem_rede(*args, **kwargs):
+        raise RuntimeError("teste tentou criar um cliente de LLM real")
+
+    monkeypatch.setattr("backend.app.llm.make_client", _sem_rede, raising=False)
+    monkeypatch.setattr("backend.app.translator.llm_available", lambda: False,
+                        raising=False)
+    monkeypatch.setattr("backend.app.creator.llm_available", lambda: False,
+                        raising=False)
+    monkeypatch.setattr("backend.app.cover.openai_configured", lambda: False,
+                        raising=False)
     yield
 
 
