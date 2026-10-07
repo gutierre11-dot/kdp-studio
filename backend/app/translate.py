@@ -144,10 +144,31 @@ def build_system_prompt(source_lang: str | None = None,
     return " ".join(partes)
 
 
+def build_title_prompt(target_lang: str | None = None) -> str:
+    """Prompt curto para traduzir o titulo de um capitulo."""
+    destino = lang_name(target_lang) or lang_name(DEFAULT_TARGET_LANG)
+    return ("Você é um tradutor literário profissional. Traduza apenas o título "
+            f"a seguir para {destino}. Retorne somente o título traduzido, em uma "
+            "única linha, sem comentários e sem aspas.")
+
+
 def _translate_text(text: str, *, system: str,
                     model: str | None = None) -> str:
     """Ponto unico de chamada ao LLM (isolado para facilitar teste)."""
     return llm.chat(system, text, model=model)
+
+
+def _traduzir_titulo(titulo: str, sistema: str, model: str | None,
+                     warn: Callable[[str], None], contexto: str) -> str:
+    if not titulo.strip():
+        return titulo
+    try:
+        saida = _translate_text(titulo, system=sistema, model=model)
+    except llm.LLMError as exc:
+        warn(f"Capítulo {contexto!r}: título mantido no idioma original ({exc}).")
+        return titulo
+    primeira = saida.strip().split("\n")[0].strip()
+    return primeira or titulo
 
 
 def _traduzir_um(texto: str, sistema: str, model: str | None,
@@ -225,6 +246,8 @@ def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
         return Chapter(chapter.title, chapter.level, [])
     sistema = build_system_prompt(source_lang, target_lang, title=title,
                                   chapter_title=chapter.title)
+    titulo = _traduzir_titulo(chapter.title, build_title_prompt(target_lang),
+                              model, warn, chapter.title)
 
     por_indice: dict[int, list[str]] = {}
     for indices, texto in montar_unidades(paragrafos, chunk_chars):
@@ -237,8 +260,7 @@ def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
     for i, original in enumerate(paragrafos):
         partes = [p.strip() for p in por_indice.get(i, []) if p.strip()]
         novos.append(" ".join(partes) if partes else original)
-    return Chapter(chapter.title, chapter.level,
-                   [Paragraph.from_text(t) for t in novos])
+    return Chapter(titulo, chapter.level, [Paragraph.from_text(t) for t in novos])
 
 
 def translate_chapters(
@@ -257,8 +279,10 @@ def translate_chapters(
     if not chapters:
         return [], []
 
-    unidades: list[tuple[int, list[int], str]] = []
+    unidades: list[tuple[int, list[int] | None, str]] = []
     for ci, capitulo in enumerate(chapters):
+        if capitulo.title.strip():
+            unidades.append((ci, None, capitulo.title))
         for indices, texto in montar_unidades([p.text for p in capitulo.paragraphs],
                                               chunk_chars):
             unidades.append((ci, indices, texto))
@@ -269,12 +293,13 @@ def translate_chapters(
 
     total = len(unidades)
     traducao: dict[int, dict[int, list[str]]] = {i: {} for i in range(len(chapters))}
+    titulos: dict[int, str] = {}
     avisos: list[str] = []
     lock = threading.Lock()
     concluidos = 0
 
-    def trabalho(ci: int, indices: list[int],
-                 texto: str) -> tuple[int, list[int], list[str], list[str]]:
+    def trabalho(ci: int, indices: list[int] | None,
+                 texto: str) -> tuple[int, list[int] | None, list[str], list[str]]:
         capitulo = chapters[ci]
         locais: list[str] = []
 
@@ -282,11 +307,15 @@ def translate_chapters(
             locais.append(msg)
 
         try:
+            if indices is None:
+                return ci, None, [_traduzir_titulo(
+                    texto, build_title_prompt(target_lang), model, warn,
+                    capitulo.title)], locais
             sistema = build_system_prompt(source_lang, target_lang, title=title,
                                           chapter_title=capitulo.title)
             resultado = _traduzir_bloco(texto, len(indices), sistema, model,
                                         warn, capitulo.title)
-        except Exception as exc:  # rede Nova/erro inesperado: nao derruba o livro
+        except Exception as exc:  # erro inesperado: nao derruba o livro
             warn(f"Capítulo {capitulo.title!r}: trecho mantido no idioma "
                  f"original ({exc}).")
             resultado = texto.split("\n\n")
@@ -312,8 +341,11 @@ def translate_chapters(
                     em_voo.pop(futuro, None)
                     with lock:
                         concluidos += 1
-                        for i, trecho in zip(indices, resultado):
-                            traducao[ci].setdefault(i, []).append(trecho)
+                        if indices is None:
+                            titulos[ci] = resultado[0]
+                        else:
+                            for i, trecho in zip(indices, resultado):
+                                traducao[ci].setdefault(i, []).append(trecho)
                         avisos.extend(locais)
                         if progress is not None:
                             progress(int(100 * concluidos / total),
@@ -330,6 +362,18 @@ def translate_chapters(
         for i, original in enumerate(paragrafos):
             partes = [p.strip() for p in traducao[ci].get(i, []) if p.strip()]
             novos.append(" ".join(partes) if partes else original)
-        saida.append(Chapter(capitulo.title, capitulo.level,
+        saida.append(Chapter(titulos.get(ci, capitulo.title), capitulo.level,
                              [Paragraph.from_text(t) for t in novos]))
+
+    mudou = any(
+        novo != original
+        for cap_original, cap_novo in zip(chapters, saida)
+        for original, novo in zip((p.text for p in cap_original.paragraphs),
+                                  (p.text for p in cap_novo.paragraphs))
+    )
+    if not mudou and any(c.paragraphs for c in chapters):
+        # Nada mudou: nenhum modelo respondeu. Reportar sucesso aqui seria
+        # entregar o livro no idioma original como se estivesse traduzido.
+        raise llm.LLMError("A tradução não produziu texto novo: nenhum modelo "
+                           "respondeu. Tente novamente mais tarde.")
     return saida, avisos

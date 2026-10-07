@@ -66,7 +66,7 @@ def test_refaz_paragrafo_a_paragrafo_quando_o_lote_desalinha(monkeypatch):
     out = translate_chapter(ch, title="L", source_lang="en", target_lang="pt-BR",
                             model=None, chunk_chars=6000, warn=lambda m: None)
     assert [p.text for p in out.paragraphs] == ["ALPHA", "BETA"]
-    assert len(chamadas) == 3  # 1 lote + 2 parágrafos
+    assert len(chamadas) == 4  # 1 título + 1 lote + 2 parágrafos
 
 
 def test_conteudo_preservado_quando_a_traducao_falha(monkeypatch):
@@ -114,7 +114,9 @@ def test_numero_de_chamadas_proporcional_a_chunks_nao_a_paragrafos(monkeypatch):
     out, avisos = translate_chapters(chs, title="L", source_lang="en",
                                      target_lang="pt-BR", model=None, workers=1,
                                      chunk_chars=6000)
-    assert len(chamadas) == 3  # 1 por capítulo, não 150
+    # no maximo 2 chamadas por capitulo (titulo + corpo), nunca 1 por paragrafo
+    assert len(chamadas) <= 2 * len(chs)
+    assert len(chamadas) < 20
     assert len(out) == 3
     assert not avisos
 
@@ -191,3 +193,43 @@ def test_detect_language_reconhece_ingles_e_portugues():
 def test_detect_language_sem_texto_usa_o_padrao():
     assert detect_language("") == "pt-BR"
     assert detect_language("1234 5678") == "pt-BR"
+
+
+def test_titulo_do_capitulo_e_traduzido(monkeypatch):
+    def fake(text, **k):
+        if text == "Chapter One":
+            return "Capítulo Um"
+        return text.upper()
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    ch = Chapter("Chapter One", 1, [Paragraph.from_text("alpha")])
+    out = translate_chapter(ch, title="L", source_lang="en", target_lang="pt-BR",
+                            model=None, chunk_chars=6000, warn=lambda m: None)
+    assert out.title == "Capítulo Um"
+    assert [p.text for p in out.paragraphs] == ["ALPHA"]
+
+
+def test_titulos_tambem_sao_traduzidos_em_lote(monkeypatch):
+    def fake(text, **k):
+        return text.replace("Chapter", "Capítulo").replace("body", "corpo")
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    chs = [Chapter("Chapter One", 1, [Paragraph.from_text("body one")]),
+           Chapter("Chapter Two", 1, [Paragraph.from_text("body two")])]
+    out, _ = translate_chapters(chs, title="L", source_lang="en",
+                                target_lang="pt-BR", model=None, workers=1,
+                                chunk_chars=6000)
+    assert [c.title for c in out] == ["Capítulo One", "Capítulo Two"]
+    assert [[p.text for p in c.paragraphs] for c in out] == [["corpo one"],
+                                                             ["corpo two"]]
+
+
+def test_traducao_totalmente_falha_levanta_erro(monkeypatch):
+    def fake(text, **k):
+        raise LLMError("503 UNAVAILABLE")
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    chs = [Chapter("A", 1, [Paragraph.from_text("alpha")])]
+    with pytest.raises(LLMError, match="não produziu"):
+        translate_chapters(chs, title="L", source_lang="en", target_lang="pt-BR",
+                           model=None, workers=1, chunk_chars=6000)

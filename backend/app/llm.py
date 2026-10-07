@@ -126,11 +126,14 @@ def _call_once(model: str, system: str, user: str, temperature: float) -> str:
 
 
 def chat(system: str, user: str, *, model: str | None = None,
-         temperature: float = 0.3, sleep=time.sleep) -> str:
+         temperature: float = 0.3, sleep=time.sleep,
+         now=time.monotonic) -> str:
     """Executa uma chamada de chat com fallback e tentativas.
 
     Cada rodada percorre toda a cadeia de modelos; se nenhum responder, espera
-    com backoff exponencial e repete, ate `LLM_MAX_RETRIES` rodadas.
+    com backoff exponencial e repete, ate `LLM_MAX_RETRIES` rodadas. O tempo
+    total e limitado por `LLM_MAX_TOTAL_SECONDS`: sem esse teto, uma cadeia de
+    modelos indisponiveis poderia segurar um chunk por dezenas de minutos.
     """
     if not is_configured():
         raise LLMError("Nenhuma chave de IA configurada "
@@ -144,10 +147,17 @@ def chat(system: str, user: str, *, model: str | None = None,
         if resolvido and resolvido in candidatos:
             candidatos = [resolvido] + [m for m in candidatos if m != resolvido]
     erros: list[str] = []
+    inicio = now()
+    limite = cfg.llm_max_total_seconds
+    esgotado = False
     for rodada in range(max(1, cfg.llm_max_retries)):
         if rodada:
             sleep(2 ** (rodada - 1))
         for nome in candidatos:
+            if now() - inicio >= limite:
+                erros.append(f"limite de {limite:.0f}s esgotado")
+                esgotado = True
+                break
             try:
                 texto = _call_once(nome, system, user, temperature)
             except LLMError as exc:
@@ -157,6 +167,8 @@ def chat(system: str, user: str, *, model: str | None = None,
             with _lock:
                 _modelo_resolvido = nome
             return texto
+        if esgotado:
+            break
     resumo = "; ".join(erros[:3]) if erros else "sem resposta"
     raise LLMError(f"Nenhum modelo respondeu ({resumo}). Verifique "
                    f"GEMINI_MODEL/GEMINI_MODEL_FALLBACKS e sua conexão.")

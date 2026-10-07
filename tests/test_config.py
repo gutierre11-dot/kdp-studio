@@ -13,7 +13,8 @@ def test_settings_defaults(monkeypatch):
     assert s.max_upload_bytes == 100 * 1024 * 1024
     assert (s.job_ttl_seconds, s.job_max, s.job_workers) == (7200, 50, 2)
     assert (s.translation_chunk_chars, s.translation_workers) == (6000, 4)
-    assert (s.llm_timeout_seconds, s.llm_max_retries) == (120.0, 3)
+    assert (s.llm_timeout_seconds, s.llm_max_retries) == (60.0, 3)
+    assert s.llm_max_total_seconds == 180.0
     assert s.primary_model == "gemini-flash-latest"
     assert s.fallback_models == ["gemini-3.8-flash", "gemini-3.7-flash",
                                  "gemini-3.1-flash-lite"]

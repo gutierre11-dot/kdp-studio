@@ -82,6 +82,24 @@ def test_modelo_resolvido_e_tentado_primeiro_depois(monkeypatch):
     assert chamados == ["rapido"]
 
 
+def test_chat_respeita_limite_total_de_tempo(monkeypatch):
+    """Sem teto de tempo, uma cadeia indisponível seguraria o job por minutos."""
+    estado = {"t": 0.0}
+    chamadas = []
+
+    def fake_call(*a, **k):
+        chamadas.append(1)
+        estado["t"] += 1000.0
+        raise llm.LLMError("503")
+
+    monkeypatch.setattr(llm, "_call_once", fake_call)
+    monkeypatch.setattr(llm, "model_candidates",
+                        lambda: ["m1", "m2", "m3"])
+    with pytest.raises(llm.LLMError):
+        llm.chat("s", "u", sleep=lambda s: None, now=lambda: estado["t"])
+    assert len(chamadas) < 9  # nao percorre 3 rodadas x 3 modelos
+
+
 def test_call_once_usa_timeout_configurado(monkeypatch):
     capturado = {}
 

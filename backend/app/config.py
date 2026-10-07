@@ -77,6 +77,7 @@ class Settings:
     translation_workers: int
     llm_timeout_seconds: float
     llm_max_retries: int
+    llm_max_total_seconds: float
     primary_model: str
     fallback_models: list[str]
     host: str
@@ -96,8 +97,9 @@ def get_settings() -> Settings:
         cors_origins=_list("CORS_ORIGINS", DEFAULT_CORS),
         translation_chunk_chars=_int("TRANSLATION_CHUNK_CHARS", 6000),
         translation_workers=_int("TRANSLATION_WORKERS", 4),
-        llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 120.0),
+        llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60.0),
         llm_max_retries=_int("LLM_MAX_RETRIES", 3),
+        llm_max_total_seconds=_float("LLM_MAX_TOTAL_SECONDS", 180.0),
         primary_model=_raw("GEMINI_MODEL") or DEFAULT_PRIMARY_MODEL,
         fallback_models=_list("GEMINI_MODEL_FALLBACKS", DEFAULT_FALLBACKS),
         host=_raw("HOST") or "127.0.0.1",
