@@ -208,8 +208,12 @@ Para cada entrada `(level, title, page_1based)`:
    com bônus `+0.15` se `norm(titulo) == norm(linha.text)` e `+0.10` se a linha é
    "cara de título" (`size > body_size * 1.05` ou `bold`).
 3. Escolhe o maior score; aceita se `score >= 0.72`.
-4. Impõe **ordem monotônica**: a linha-âncora deve ter índice de leitura maior que
-   a anterior. Se não, a entrada é descartada do caminho outline.
+4. Impõe **ordem monotônica**. Quando a melhor correspondência viola a ordem, ou
+   fica abaixo de 0,72, a entrada é **reancorada** à primeira linha de conteúdo
+   elegível após a âncora anterior na sua página (só quando a página for igual ou
+   posterior à da âncora anterior). A entrada só é descartada se não houver
+   nenhuma linha elegível — descartar em silêncio faria o conteúdo dela ser
+   absorvido pelo capítulo anterior.
 5. Se `ancoradas / total >= 0.80`, o caminho outline é usado.
 
 **Passo 3 — fallback heurístico** (sem outline ou ancoragem insuficiente).
@@ -256,8 +260,12 @@ Para cada entrada `(level, title, page_1based)`:
 - `level` do capítulo = nível do outline (limitado a 1..3) ou o do heurístico.
 
 **Passo 7 — validação de sanidade.**
-Emite aviso (em `warnings`, exibido na UI) e degrada para estratégia
-conservadora quando:
+- Capítulos com **zero parágrafos** são descartados e geram aviso (isso remove
+  naturalmente entradas de outline como "Cover", que não têm corpo no texto
+  extraído). Se o descarte zerar a lista, mantém-se um único capítulo com todo o
+  texto.
+- Emite aviso (em `warnings`, exibido na UI) e degrada para estratégia
+  conservadora quando:
 - `len(capítulos_nivel_1) > 60`, ou
 - `len(capítulos_total) > max(50, pages / 1.5)`, ou
 - mais de 50 % dos capítulos têm menos de 2 parágrafos.
