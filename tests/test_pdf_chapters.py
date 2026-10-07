@@ -2,6 +2,7 @@
 from backend.app.models import Line
 from backend.app.pdf_chapters import (
     anchor_outline,
+    detect_headings,
     modal_body_size,
     normalize,
 )
@@ -53,3 +54,34 @@ def test_entradas_duplicadas_nao_produzem_ancoras_repetidas():
 def test_candidato_abaixo_da_banda_de_topo_nao_e_ancorado():
     linhas = [_linha(0, "corpo", 10.0, 700, h=800.0)]
     assert anchor_outline(linhas, [[1, "corpo", 1]], 10.0) == []
+
+
+def test_heuristica_detecta_titulo_por_tamanho():
+    linhas = [_linha(0, "Capítulo Um", 22.0, 40),
+              _linha(0, "corpo do texto.", 10.0, 120)]
+    det = detect_headings(linhas, 10.0)
+    assert [(i, lv) for i, lv, _ in det] == [(0, 1)]
+
+
+def test_heuristica_ignora_frase_do_corpo():
+    linhas = [_linha(0, "Esta é uma frase normal do corpo do livro.", 10.0, 120)]
+    assert detect_headings(linhas, 10.0) == []
+
+
+def test_heuristica_ignora_numero_de_pagina():
+    linhas = [_linha(0, "42", 10.0, 780, h=800.0)]
+    assert detect_headings(linhas, 10.0) == []
+
+
+def test_heuristica_detecta_capitulo_numerado_mesmo_sem_fonte_maior():
+    linhas = [_linha(0, "CAPÍTULO 7", 10.0, 40),
+              _linha(0, "corpo do texto.", 10.0, 120)]
+    det = detect_headings(linhas, 10.0)
+    assert det and det[0][1] == 1
+
+
+def test_heuristica_detecta_subtitulo_bold_pequeno():
+    linhas = [_linha(0, "Uma abordagem prática", 11.5, 40, bold=True),
+              _linha(0, "corpo do texto.", 10.0, 120)]
+    det = detect_headings(linhas, 10.0)
+    assert det and det[0][1] == 2

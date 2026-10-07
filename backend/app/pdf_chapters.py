@@ -122,11 +122,61 @@ def outline_coverage(anchors: list[Anchor], outline: list[list]) -> float:
     return len(anchors) / total
 
 
+# ---------------------------------------------------------------------------
+# Fallback heuristico (PDFs sem bookmarks utilizaveis)
+# ---------------------------------------------------------------------------
+
+_CHAPTER_START_RE = re.compile(r"^(cap[íi]tulo|chapter|parte|part)\b",
+                               re.IGNORECASE)
+_NUMBERED_RE = re.compile(r"^\d+(?:\.\d+)*\s+\S")
+_FRONT_MATTER_RE = re.compile(
+    r"^(pref[áa]cio|introdu[çc][ãa]o|conclus[ãa]o|ep[íi]logo|ap[êe]ndice|"
+    r"agradecimentos|bibliografia|[íi]ndice|sum[áa]rio|notas?)\b",
+    re.IGNORECASE,
+)
+_MAX_TITLE_LEN = 90
+_FOOTER_BAND = 0.9
+
+
+def detect_headings(lines: list[Line], body_size: float) -> list[Anchor]:
+    """Detecta titulos por heuristica de fonte e padrao textual.
+
+    Usado apenas quando nao ha outline confiavel. Prefere poucos falsos
+    positivos: linhas longas, frases terminadas em pontuacao e numeracao de
+    pagina ficam de fora.
+    """
+    h1_min = body_size * 1.25
+    h2_min = body_size * 1.10
+    achados: list[Anchor] = []
+    for i, linha in enumerate(lines):
+        texto = linha.text.strip()
+        if len(texto) < 3 or len(texto) > _MAX_TITLE_LEN:
+            continue
+        if linha.bbox[1] > _FOOTER_BAND * linha.page_height:
+            continue
+        if texto.isdigit():
+            continue
+        capitulo = bool(_CHAPTER_START_RE.match(texto))
+        materias = bool(_FRONT_MATTER_RE.match(texto))
+        numerado = bool(_NUMBERED_RE.match(texto))
+        grande = linha.size >= h1_min
+        medio = linha.size >= h2_min and (linha.bold or texto.isupper())
+        if not (capitulo or materias or numerado or grande or medio):
+            continue
+        if capitulo or materias or grande:
+            nivel = 1
+        else:
+            nivel = 2
+        achados.append((i, nivel, texto))
+    return achados
+
+
 __all__ = [
     "ANCHOR_COVERAGE_MIN",
     "REANCHOR_MIN",
     "SIMILARITY_MIN",
     "anchor_outline",
+    "detect_headings",
     "modal_body_size",
     "normalize",
     "outline_coverage",
