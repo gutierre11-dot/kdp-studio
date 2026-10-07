@@ -62,6 +62,26 @@ def test_chat_offline_levanta_erro_explicito(monkeypatch):
         llm.chat("s", "u")
 
 
+def test_modelo_resolvido_e_tentado_primeiro_depois(monkeypatch):
+    """Depois do primeiro sucesso, nao se paga de novo o custo dos 503."""
+    chamados = []
+
+    def fake_call(model, system, user, temperature):
+        chamados.append(model)
+        if model == "lento":
+            raise llm.LLMError("503")
+        return "ok"
+
+    monkeypatch.setattr(llm, "_call_once", fake_call)
+    monkeypatch.setattr(llm, "model_candidates", lambda: ["lento", "rapido"])
+    llm.reset_model_cache()
+    assert llm.chat("s", "u", sleep=lambda s: None) == "ok"
+    assert chamados == ["lento", "rapido"]
+    chamados.clear()
+    assert llm.chat("s", "u", sleep=lambda s: None) == "ok"
+    assert chamados == ["rapido"]
+
+
 def test_call_once_usa_timeout_configurado(monkeypatch):
     capturado = {}
 

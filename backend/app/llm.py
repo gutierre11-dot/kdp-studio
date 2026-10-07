@@ -138,6 +138,12 @@ def chat(system: str, user: str, *, model: str | None = None,
                        "(OPENAI_API_KEY/GEMINI_API_KEY).")
     cfg = config.get_settings()
     candidatos = [model] if model else model_candidates()
+    if model is None:
+        # Depois do primeiro sucesso, o modelo que respondeu vai na frente: sem
+        # isso cada chunk pagaria de novo a espera dos modelos indisponiveis.
+        resolvido = resolved_model()
+        if resolvido and resolvido in candidatos:
+            candidatos = [resolvido] + [m for m in candidatos if m != resolvido]
     erros: list[str] = []
     for rodada in range(max(1, cfg.llm_max_retries)):
         if rodada:
