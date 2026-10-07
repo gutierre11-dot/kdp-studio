@@ -9,6 +9,8 @@ a estrutura errada.
 from __future__ import annotations
 
 import re
+import threading
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Callable
 
 from . import llm
@@ -16,6 +18,10 @@ from .models import Chapter, Paragraph
 
 DEFAULT_TARGET_LANG = "pt-BR"
 DEFAULT_SOURCE_LANG = "auto"
+
+
+class CancelledError(RuntimeError):
+    """O job de traducao foi cancelado pelo usuario."""
 
 # Nomes legiveis para o prompt (sem acento: o modelo entende igual).
 LANG_NAMES = {
@@ -195,3 +201,97 @@ def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
         novos.append(" ".join(partes) if partes else original)
     return Chapter(chapter.title, chapter.level,
                    [Paragraph.from_text(t) for t in novos])
+
+
+def translate_chapters(
+    chapters: list[Chapter], *, title: str, source_lang: str, target_lang: str,
+    model: str | None, workers: int, chunk_chars: int,
+    progress: Callable[[int, str], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> tuple[list[Chapter], list[str]]:
+    """Traduz todos os capitulos com paralelismo limitado e progresso real.
+
+    Usa janela deslizante (no maximo `workers` unidades em voo) para que o
+    cancelamento tenha efeito rapido. O contador de concluidos e a chamada a
+    `progress` ficam sob o mesmo lock, garantindo percentuais nao decrescentes
+    mesmo com completions fora de ordem.
+    """
+    if not chapters:
+        return [], []
+
+    unidades: list[tuple[int, list[int], str]] = []
+    for ci, capitulo in enumerate(chapters):
+        for indices, texto in montar_unidades([p.text for p in capitulo.paragraphs],
+                                              chunk_chars):
+            unidades.append((ci, indices, texto))
+    if not unidades:
+        if progress is not None:
+            progress(100, "Nada a traduzir")
+        return list(chapters), []
+
+    total = len(unidades)
+    traducao: dict[int, dict[int, list[str]]] = {i: {} for i in range(len(chapters))}
+    avisos: list[str] = []
+    lock = threading.Lock()
+    concluidos = 0
+
+    def trabalho(ci: int, indices: list[int],
+                 texto: str) -> tuple[int, list[int], list[str], list[str]]:
+        capitulo = chapters[ci]
+        locais: list[str] = []
+
+        def warn(msg: str) -> None:
+            locais.append(msg)
+
+        try:
+            sistema = build_system_prompt(source_lang, target_lang, title=title,
+                                          chapter_title=capitulo.title)
+            resultado = _traduzir_bloco(texto, len(indices), sistema, model,
+                                        warn, capitulo.title)
+        except Exception as exc:  # rede Nova/erro inesperado: nao derruba o livro
+            warn(f"Capítulo {capitulo.title!r}: trecho mantido no idioma "
+                 f"original ({exc}).")
+            resultado = texto.split("\n\n")
+        return ci, indices, resultado, locais
+
+    n_workers = max(1, int(workers))
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        em_voo: dict[Future, tuple[int, list[int], str]] = {}
+        proximo = 0
+        try:
+            while proximo < total or em_voo:
+                while proximo < total and len(em_voo) < n_workers:
+                    if cancel is not None and cancel.is_set():
+                        raise CancelledError("tradução cancelada")
+                    em_voo[pool.submit(trabalho, *unidades[proximo])] = \
+                        unidades[proximo]
+                    proximo += 1
+                if not em_voo:
+                    break
+                concluidos_agora, _ = wait(em_voo, return_when=FIRST_COMPLETED)
+                for futuro in concluidos_agora:
+                    ci, indices, resultado, locais = futuro.result()
+                    em_voo.pop(futuro, None)
+                    with lock:
+                        concluidos += 1
+                        for i, trecho in zip(indices, resultado):
+                            traducao[ci].setdefault(i, []).append(trecho)
+                        avisos.extend(locais)
+                        if progress is not None:
+                            progress(int(100 * concluidos / total),
+                                     f"Traduzindo {concluidos}/{total}")
+        except CancelledError:
+            for futuro in em_voo:
+                futuro.cancel()
+            raise
+
+    saida: list[Chapter] = []
+    for ci, capitulo in enumerate(chapters):
+        paragrafos = [p.text for p in capitulo.paragraphs]
+        novos: list[str] = []
+        for i, original in enumerate(paragrafos):
+            partes = [p.strip() for p in traducao[ci].get(i, []) if p.strip()]
+            novos.append(" ".join(partes) if partes else original)
+        saida.append(Chapter(capitulo.title, capitulo.level,
+                             [Paragraph.from_text(t) for t in novos]))
+    return saida, avisos

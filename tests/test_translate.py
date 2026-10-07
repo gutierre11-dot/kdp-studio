@@ -1,12 +1,16 @@
 """Testes do motor de traducao em lote."""
+import threading
+
 import pytest
 
 from backend.app.llm import LLMError
 from backend.app.models import Chapter, Paragraph
 from backend.app.translate import (
+    CancelledError,
     build_system_prompt,
     split_chunks,
     translate_chapter,
+    translate_chapters,
 )
 
 
@@ -94,3 +98,77 @@ def test_chapter_vazio_nao_quebra(monkeypatch):
     out = translate_chapter(ch, title="L", source_lang="en", target_lang="pt-BR",
                             model=None, chunk_chars=6000, warn=lambda m: None)
     assert out.paragraphs == []
+
+
+def test_numero_de_chamadas_proporcional_a_chunks_nao_a_paragrafos(monkeypatch):
+    chamadas = []
+
+    def fake(text, **k):
+        chamadas.append(text)
+        return text.upper()
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    chs = [Chapter(f"C{i}", 1, [Paragraph.from_text(f"p{j}") for j in range(50)])
+           for i in range(3)]
+    out, avisos = translate_chapters(chs, title="L", source_lang="en",
+                                     target_lang="pt-BR", model=None, workers=1,
+                                     chunk_chars=6000)
+    assert len(chamadas) == 3  # 1 por capítulo, não 150
+    assert len(out) == 3
+    assert not avisos
+
+
+def test_progresso_e_reportado(monkeypatch):
+    monkeypatch.setattr("backend.app.translate._translate_text",
+                        lambda t, **k: t)
+    vistos = []
+    chs = [Chapter(f"C{i}", 1, [Paragraph.from_text("x" * 4000)])
+           for i in range(4)]
+    translate_chapters(chs, title="L", source_lang="en", target_lang="pt-BR",
+                       model=None, workers=2, chunk_chars=2000,
+                       progress=lambda p, msg: vistos.append(p))
+    assert vistos
+    assert vistos == sorted(vistos)
+    assert vistos[-1] == 100
+
+
+def test_cancelamento_interrompe(monkeypatch):
+    monkeypatch.setattr("backend.app.translate._translate_text",
+                        lambda t, **k: t)
+    evento = threading.Event()
+
+    def prog(p, msg):
+        if p >= 30:
+            evento.set()
+
+    chs = [Chapter(f"C{i}", 1, [Paragraph.from_text("x" * 9000)])
+           for i in range(6)]
+    with pytest.raises(CancelledError):
+        translate_chapters(chs, title="L", source_lang="en", target_lang="pt-BR",
+                           model=None, workers=1, chunk_chars=1000,
+                           progress=prog, cancel=evento)
+
+
+def test_falha_de_um_capitulo_nao_aborta_os_outros(monkeypatch):
+    def fake(text, **k):
+        if "BOM" in text:
+            raise LLMError("503")
+        return text.upper()
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    chs = [Chapter("A", 1, [Paragraph.from_text("ok")]),
+           Chapter("B", 1, [Paragraph.from_text("BOM falha")]),
+           Chapter("C", 1, [Paragraph.from_text("ok2")])]
+    out, avisos = translate_chapters(chs, title="L", source_lang="en",
+                                     target_lang="pt-BR", model=None, workers=1,
+                                     chunk_chars=6000)
+    assert len(out) == 3
+    assert out[1].paragraphs[0].text == "BOM falha"
+    assert avisos
+
+
+def test_lista_vazia_nao_quebra():
+    out, avisos = translate_chapters([], title="L", source_lang="en",
+                                     target_lang="pt-BR", model=None, workers=1,
+                                     chunk_chars=6000)
+    assert out == [] and avisos == []
