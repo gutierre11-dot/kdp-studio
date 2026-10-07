@@ -13,21 +13,15 @@ if str(ROOT) not in sys.path:
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
-    """Impede que os testes chamem APIs de LLM reais (custo/rede).
+    """Impede que os testes criem clientes de LLM reais (custo/rede).
 
-    Forca o modo offline em todos os modulos que consultam provider e torna
-    qualquer chamada de rede um erro explicito em vez de uma requisicao.
+    Qualquer tentativa de montar um cliente vira um erro explicito em vez de
+    uma requisicao de rede.
     """
     def _sem_rede(*args, **kwargs):
         raise RuntimeError("teste tentou criar um cliente de LLM real")
 
     monkeypatch.setattr("backend.app.llm.make_client", _sem_rede, raising=False)
-    monkeypatch.setattr("backend.app.translator.llm_available", lambda: False,
-                        raising=False)
-    monkeypatch.setattr("backend.app.creator.llm_available", lambda: False,
-                        raising=False)
-    monkeypatch.setattr("backend.app.cover.openai_configured", lambda: False,
-                        raising=False)
     yield
 
 

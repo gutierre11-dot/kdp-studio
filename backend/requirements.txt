@@ -1,12 +1,9 @@
 # KDP Studio — dependências de runtime (versões fixadas p/ reprodutibilidade).
 # Instale com: python3 -m pip install -r requirements.txt
-# A raiz usa este mesmo arquivo via `-r backend/requirements.txt` (sem duplicar).
 fastapi==0.142.2
 uvicorn==0.54.0
 pymupdf==1.28.2
 ebooklib==0.18
-python-docx==1.2.0
-pillow==12.3.0
 python-multipart==0.0.32
 python-dotenv==1.2.4
 openai==3.24.0

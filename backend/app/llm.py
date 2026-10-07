@@ -23,7 +23,6 @@ log = logging.getLogger(__name__)
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OPENAI_DEFAULT_TRANSLATION_MODEL = "gpt-4o-mini"
-OPENAI_DEFAULT_CREATION_MODEL = "gpt-4o"
 
 _lock = threading.Lock()
 _modelo_resolvido: str | None = None
@@ -161,42 +160,3 @@ def chat(system: str, user: str, *, model: str | None = None,
     resumo = "; ".join(erros[:3]) if erros else "sem resposta"
     raise LLMError(f"Nenhum modelo respondeu ({resumo}). Verifique "
                    f"GEMINI_MODEL/GEMINI_MODEL_FALLBACKS e sua conexão.")
-
-
-# ---------------------------------------------------------------------------
-# Compatibilidade com os modulos legados (removida na limpeza final)
-# ---------------------------------------------------------------------------
-
-def load_env() -> list[str]:  # pragma: no cover - delegacao
-    return config.load_env()
-
-
-def active_provider() -> str:  # pragma: no cover - delegacao
-    return provider_name()
-
-
-def llm_available() -> bool:  # pragma: no cover - delegacao
-    return is_configured()
-
-
-def gemini_model() -> str:  # pragma: no cover - delegacao
-    return config.get_settings().primary_model
-
-
-def effective_translation_model() -> str:  # pragma: no cover - delegacao
-    return config.get_settings().primary_model
-
-
-def effective_creation_model() -> str:  # pragma: no cover - delegacao
-    if provider_name() == "gemini":
-        return config.get_settings().primary_model
-    return OPENAI_DEFAULT_CREATION_MODEL
-
-
-def resolve_chat_model(requested: str | None, kind: str = "translation") -> str:
-    if active_provider() == "gemini" and (not requested or requested in (
-            "gpt-4o-mini", "gpt-4o", "gpt-4o-mini-translate")):
-        return config.get_settings().primary_model
-    return requested or (OPENAI_DEFAULT_TRANSLATION_MODEL
-                         if kind == "translation"
-                         else OPENAI_DEFAULT_CREATION_MODEL)

@@ -1,7 +1,7 @@
 [project]
 name = "kdp-studio"
 version = "1.0.0"
-description = "Converta PDFs em eBooks EPUB/DOCX prontos para o KDP, traduza obras e crie livros com IA."
+description = "Converta PDFs em EPUB no padrão KDP e traduza obras inteiras para português brasileiro."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,8 +9,6 @@ dependencies = [
     "uvicorn",
     "pymupdf",
     "ebooklib",
-    "python-docx",
-    "pillow",
     "python-multipart",
     "python-dotenv",
     "openai",

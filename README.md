@@ -1,10 +1,18 @@
 # 📚 KDP Studio
 
-Converta PDFs em eBooks, traduza obras e crie livros com IA — exporte **EPUB** e **DOCX** prontos para o KDP da Amazon.
+Converta um PDF em **EPUB 3 no padrão KDP** — com capítulos detectados pelo
+sumário do próprio PDF — e, opcionalmente, **traduza a obra para português
+brasileiro** no mesmo fluxo.
+
+Dois caminhos, um só pipeline:
+
+1. **PDF → EPUB**: extrai o texto, detecta capítulos e gera um EPUB validado.
+2. **PDF (outro idioma) → tradução → EPUB pt-BR**: traduz em lote com progresso
+   real e gera o EPUB no idioma de destino.
 
 - **Backend:** FastAPI (`backend/app/`)
 - **Frontend:** SPA sem build (`static/` — abra via backend, não como arquivo)
-- **Saída:** arquivos gerados em `output/` (servidos em `/download/`)
+- **Saída:** EPUB gerado em `output/`
 - **Testes:** `pytest` (`tests/`)
 
 ## 🚀 Como rodar
@@ -14,111 +22,126 @@ cd kdp-studio
 ./run.sh                      # instala deps se faltarem e sobe o servidor
 # variações:
 PORT=9000 ./run.sh            # outra porta
-RELOAD=0 ./run.sh             # sem --reload (uso "produção" local)
-# manual (também funciona: o .env é carregado pela própria app):
+RELOAD=0 ./run.sh             # sem --reload
+# manual (o .env é carregado pela própria app):
 python3 -m pip install -r requirements.txt
-python3 -m uvicorn backend.app.main:app --reload --port 8000
-# alternativa:
-python3 -m backend.app.main   # usa HOST/PORT/RELOAD do ambiente
+python3 -m uvicorn backend.app.main:app --port 8000
 ```
 
-Abra **http://127.0.0.1:8000** (o backend serve o frontend em `/`).
+Abra **http://127.0.0.1:8000** — o backend serve o frontend em `/`.
 
-> O backend é **Python/FastAPI** — não há dependências Node no projeto.
-> Se você preferir digitar `npm`, o [`package.json`](package.json) existe
-> apenas como atalho para os mesmos comandos:
-> `npm run dev` (= `bash run.sh`), `npm start` (= `RELOAD=0 bash run.sh`),
-> `npm test` (= `pytest`) e `npm run check` (compila Python + valida o JS).
+> Sem `OPENAI_API_KEY` e sem `GEMINI_API_KEY` o app **continua funcionando**
+> para PDF → EPUB; apenas a tradução fica indisponível, e a interface avisa.
 
-> **Configuração:** o arquivo `.env` **na raiz** do projeto é carregado
-> automaticamente pela aplicação (via `python-dotenv`), tanto por `./run.sh`
-> quanto por `uvicorn backend.app.main:app`. Copie `.env.example` para `.env`
-> e preencha. Mantenha **um único** `.env` (evite duplicar chaves em
-> `backend/.env`).
+## ⚙️ Configuração
 
-> Sem `OPENAI_API_KEY` e sem `GEMINI_API_KEY` o app funciona em **modo offline**
-> (mocks locais de tradução/criação e capa gerada com Pillow). Quando a chave
-> existe mas a chamada falha, o fallback local assume e a UI avisa.
-
-### Variáveis de ambiente
+Copie `.env.example` para `.env` na raiz do projeto. Mantenha **um único** `.env`.
 
 | Variável | Padrão | Uso |
 |---|---|---|
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | — | provider OpenAI (ou compatível: OpenRouter, DeepSeek…) |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | `gemini-flash-latest` | provider Gemini (endpoint OpenAI-compatible) |
-| `TRANSLATION_MODEL` / `CREATION_MODEL` | `gpt-4o-mini` / `gpt-4o` | override explícito de modelo |
-| `COVER_MODEL` | `dall-e-3` | modelo de imagem (só OpenAI) |
-| `MAX_UPLOAD_MB` | `100` | tamanho máximo de PDF aceito |
+| `GEMINI_API_KEY` | — | provider Gemini (endpoint OpenAI-compatible) |
+| `GEMINI_MODEL` | `gemini-flash-latest` | modelo primário de tradução |
+| `GEMINI_MODEL_FALLBACKS` | `gemini-3.8-flash,gemini-3.7-flash,gemini-3.1-flash-lite` | cadeia tentada quando o primário falha (404/503) |
+| `TRANSLATION_MODEL` | — | força um modelo específico (ignora a cadeia) |
+| `TRANSLATION_CHUNK_CHARS` | `6000` | caracteres por chamada de tradução |
+| `TRANSLATION_WORKERS` | `4` | chamadas de tradução em paralelo |
+| `LLM_TIMEOUT_SECONDS` | `120` | timeout por chamada de LLM |
+| `LLM_MAX_RETRIES` | `3` | rodadas completas pela cadeia de modelos |
+| `MAX_UPLOAD_MB` | `100` | tamanho máximo do PDF |
+| `JOB_TTL_SECONDS` / `JOB_MAX` / `JOB_WORKERS` | `7200` / `50` / `2` | retenção e paralelismo dos jobs |
 | `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | origens permitidas |
-| `JOB_TTL_SECONDS` / `JOB_MAX` | `7200` / `50` | retenção dos jobs de conversão em memória |
-| `HOST` / `PORT` / `RELOAD` | `127.0.0.1` / `8000` / `0` | servidor (`run.sh` usa `RELOAD=1`) |
+| `HOST` / `PORT` / `RELOAD` | `127.0.0.1` / `8000` / `0` | servidor |
+
+> **Provider:** se `OPENAI_API_KEY` existir, ele ganha; senão vale o
+> `GEMINI_API_KEY`. Modelos Gemini mudam com frequência — por isso existe a
+> cadeia de fallback: quando um modelo responde 404/503, o próximo assume, e o
+> modelo que funcionou passa a ser tentado primeiro nas chamadas seguintes.
 
 ## 🔌 API
 
 | Método | Rota | Uso |
 |---|---|---|
-| GET | `/api/health` (e `/health`) | status |
-| GET | `/api/models` | provider ativo, modelos efetivos e se há chave |
-| POST | `/api/pdf/parse` | extrai capítulos de um PDF (multipart `file`; toggles opcionais) |
-| POST | `/api/pdf/convert` | PDF → EPUB+DOCX+prévia (multipart `file`, `title`, `author`, toggles) |
-| POST | `/api/convert` | **alias frontend**: FormData `file, title, author, format, remove_header, remove_page_numbers` e opcionais `translate, source_lang, target_lang, translation_model` → `{job_id, chapters, epub, docx, preview, translated, source_lang, target_lang, translation_model}` |
-| GET | `/api/convert/{job}/download?format=epub&include=0,1` | baixa o EPUB/DOCX do job (`include` = **índices originais**) |
-| POST | `/api/translate` | JSON `{chapters[], model, source_lang, target_lang}` **ou** FormData `{text, file (PDF/.txt/.md/.docx), source_lang, target_lang, model}`; opcionais `export` (bool), `format` (só `epub`), `title`, `author` — com `export` ligado a resposta também inclui `job_id`, `epub` e `files`; PDF sem texto real → **422** (OCR fora de escopo) |
-| POST | `/api/books/plan` | `{ideia, genero, estilo, publico, capitulos}` → `{titulo, outline}` |
-| POST | `/api/books/write` | `{outline[], titulo, estilo}` → `{chapters}` |
-| POST | `/api/ebook/outline` | alias: `{idea\|ideia, genre\|genero, style\|estilo, audience\|publico, num_chapters\|capitulos}` |
-| POST | `/api/ebook/chapter` | alias: `{chapter_title, chapter_synopsis, title, style, chapter_number, …}` → `{text, body, chapter, mock}` |
-| POST | `/api/ebook/cover` | alias: `{prompt\|title\|titulo, author\|autor}` → `{image_url, url}` |
-| POST | `/api/ebook/export` | alias: `{title, author, format, chapters[{title, body}]}` → **arquivo** (blob) quando `format=epub\|docx`; `all` devolve o trio |
-| POST | `/api/export` | `{chapters, title, author}` → `{epub, docx, preview}` (URLs `/download/*`) |
-| POST | `/api/cover/generate` | `{titulo, autor, estilo}` → `{image_url, url}` |
-| GET | `/api/library` | `{items[{id, kind, title, detail, date, download_url}]}` |
-| DELETE | `/api/library/{arquivo}` | remove um arquivo gerado de `output/` |
-| GET | `/download/{arquivo}` | arquivos gerados (canônico) |
-| GET | `/static/{arquivo}` | mesmos arquivos (legado) |
+| GET | `/api/health` | status |
+| GET | `/api/config` | provider ativo, modelos, limites e idiomas |
+| POST | `/api/jobs` | multipart `file`, `title`, `author`, `translate`, `source_lang`, `target_lang`, `translation_model`, `remove_header`, `remove_page_numbers` → `201 {job_id}` |
+| GET | `/api/jobs/{id}` | `status`, `stage`, `progress`, `message`, `warnings`, `error` e metadados dos capítulos |
+| GET | `/api/jobs/{id}/chapters/{i}` | texto completo de um capítulo |
+| POST | `/api/jobs/{id}/export` | JSON `{chapters:[{index,title,included}], edit?}` → arquivo `application/epub+zip` |
+| POST | `/api/jobs/{id}/cancel` | cancela a tradução em andamento |
+| DELETE | `/api/jobs/{id}` | descarta o job e seus artefatos |
+| GET | `/download/{arquivo}` | arquivos gerados |
 
-**Idiomas na tradução:** `source_lang` (`auto` por padrão) e `target_lang`
-(`pt-BR` por padrão) são realmente aplicados ao prompt do modelo.
+Códigos de erro: `400` requisição inválida, `404` job inexistente, `409` job em
+`error`/`cancelled`, `413` arquivo acima do limite, `422` PDF sem texto
+extraível (OCR de PDFs escaneados não é suportado).
+
+## 🧠 Como os capítulos são detectados
+
+1. **Bookmarks primeiro.** PDFs costumam trazer o sumário embutido
+   (`doc.get_toc()`); cada entrada é ancorada à linha real do texto por
+   similaridade normalizada, preservando a ordem de leitura.
+2. **Heurística de fontes como fallback.** Sem bookmarks utilizáveis, os títulos
+   são inferidos pelo tamanho modal do corpo, negrito, caixa-alta e padrões
+   textuais (`Capítulo N`, `1.2 Título`, `Prefácio`…).
+3. **Limpeza.** Cabeçalhos e rodapés repetidos são removidos por banda +
+   repetição entre páginas; a numeração de página sai; palavras quebradas por
+   hífen são reunidas; parágrafos são juntados inclusive entre páginas.
+4. **Validação de sanidade.** Se a contagem de capítulos explodir (sinal de
+   detecção errada), o pipeline degrada para a estratégia conservadora e
+   registra um aviso visível na interface.
 
 ## 📁 Estrutura
 
 ```
 kdp-studio/
-├── backend/app/{main,creator,translator,pdf_cleaner,kdp_export,cover,llm}.py
-├── backend/requirements.txt   (canônico; a raiz referencia com -r)
-├── requirements-dev.txt       (runtime + pytest)
-├── pyproject.toml             (metadados + config do pytest/ruff)
-├── static/{index.html,app.js,styles.css}
-├── static/vendor/tailwind.js  (Tailwind servido localmente — sem CDN)
-├── tests/                     (pytest: pdf_cleaner, translator, kdp_export, API)
-├── output/                    (gerados: .epub/.docx/.html/.jpg — ignorado no git)
-├── docs/GOOGLE_GEMINI.md
-├── package.json               (atalhos npm: dev/start/test/check — sem deps Node)
-├── run.sh  .env.example  README.md
+├── backend/app/
+│   ├── config.py        # Settings: env, limites, timeouts, cadeia de modelos
+│   ├── models.py        # Run, Line, Paragraph, Chapter, ChapterView, JobState
+│   ├── jobs.py          # JobStore: progresso, cancelamento, TTL
+│   ├── llm.py           # provider + timeout + retry + fallback de modelos
+│   ├── pdf_extract.py   # PyMuPDF -> linhas com geometria e formatação inline
+│   ├── pdf_chapters.py  # bookmarks + heurística + limpeza -> capítulos
+│   ├── translate.py     # tradução em lote, paralela, com progresso
+│   ├── kdp_epub.py      # EPUB 3, escrita atômica e validação
+│   └── main.py          # rotas
+├── static/{index.html,app.js,styles.css,vendor/tailwind.js}
+├── tests/               # unitários, API e aceitação com PDFs reais
+└── docs/superpowers/    # spec e plano da refatoração
 ```
 
-## 🧪 Testes e smoke test
+## 🧪 Testes
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
-python3 -m pytest -q                      # suíte completa
+python3 -m pytest -q          # suíte completa (offline, sem chamadas de LLM)
 
-python3 -m py_compile backend/app/*.py
-python3 -m uvicorn backend.app.main:app --port 8000 & sleep 4
-curl -s localhost:8000/api/health         # {"ok": true}
-curl -s localhost:8000/api/models         # provider_ativo: openai|gemini|offline
-curl -s localhost:8000/api/library        # {"items": [...]}
-curl -s -o /dev/null -w "%{http_code}\n" localhost:8000/   # 200 (SPA)
+# aceitação com PDFs reais (pulada se a variável não existir):
+KDP_REAL_PDFS_DIR="$HOME/Downloads" python3 -m pytest -q -m acceptance
 ```
 
-## 🔒 Segurança
+A suíte nunca chama a API real: a fixture `offline` transforma qualquer criação
+de cliente de LLM em erro.
 
-- O `.env` fica fora do versionamento (`.gitignore`) e deve ter permissão `600`.
-  Mantenha **apenas um** arquivo com chaves reais.
-- O backend escuta em `127.0.0.1` por padrão e o CORS é restrito às origens
-  locais (ajustável em `CORS_ORIGINS`).
-- Downloads e a biblioteca operam apenas sobre nomes de arquivo dentro de
-  `output/` (sem path traversal).
-- O frontend usa **Tailwind local** (`static/vendor/tailwind.js`), servido pelo
-  próprio backend — funciona offline e não depende de CDN/CORS. As fontes vêm
-  do Google Fonts com fallback do sistema.
+Smoke test:
+
+```bash
+./run.sh & sleep 5
+curl -s localhost:8000/api/health     # {"ok": true}
+curl -s localhost:8000/api/config     # provider, modelos, limites
+```
+
+## ⚠️ Limitações conhecidas
+
+- **PDFs escaneados** (sem camada de texto) são recusados com HTTP 422; não há OCR.
+- No **texto traduzido** não se preserva itálico/negrito: o modelo não mapeia
+  formatação inline de forma confiável. No texto original ela é preservada.
+- A detecção por heurística (PDFs sem bookmarks) é menos precisa que a via
+  bookmarks e pode exigir revisão manual dos títulos.
+
+## 📌 Escopo
+
+Esta versão foca em **PDF → EPUB** e **tradução**. Foram removidos da base
+anterior: o assistente de criação de livros com IA, a geração de capa, a
+exportação DOCX e a biblioteca de arquivos. O histórico está no git
+(o estado anterior à refatoração é o commit `957c3fa`).

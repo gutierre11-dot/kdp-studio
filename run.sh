@@ -32,7 +32,7 @@ then
 fi
 
 # Instala dependencias somente se faltar alguma (antes rodava pip em todo start).
-if ! python3 -c "import fastapi, uvicorn, pymupdf, ebooklib, docx, PIL, openai, httpx, dotenv" 2>/dev/null; then
+if ! python3 -c "import fastapi, uvicorn, pymupdf, ebooklib, openai, httpx, dotenv" 2>/dev/null; then
   echo "Instalando dependências..."
   python3 -m pip install -r requirements.txt
 fi
