@@ -2,7 +2,13 @@
 import re
 import zipfile
 
-from backend.app.kdp_epub import build_epub
+import pytest
+
+from backend.app.kdp_epub import (
+    EpubValidationError,
+    build_epub,
+    validate_epub,
+)
 from backend.app.models import Chapter, Paragraph, Run
 
 
@@ -76,3 +82,48 @@ def test_epub_metadados_e_idioma(tmp_path):
     assert "Maria Silva" in opf
     assert "pt-BR" in opf
     assert "dcterms:modified" in opf
+
+
+def test_validate_epub_aceita_epub_valido(tmp_path):
+    out = build_epub(_caps(), "T", "A", "pt-BR", tmp_path / "ok.epub")
+    validate_epub(out)  # não levanta
+
+
+def test_validate_epub_rejeita_zip_inconsistente(tmp_path):
+    ruim = tmp_path / "ruim.epub"
+    with zipfile.ZipFile(ruim, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", "<container/>")
+        zf.writestr("EPUB/content.opf", "<package><manifest>"
+                    '<item href="cap1.xhtml"/></manifest></package>')
+    with pytest.raises(EpubValidationError, match="cap1.xhtml"):
+        validate_epub(ruim)
+
+
+def test_validate_epub_rejeita_mimetype_comprimido(tmp_path):
+    ruim = tmp_path / "ruim.epub"
+    with zipfile.ZipFile(ruim, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", "<container/>")
+        zf.writestr("EPUB/content.opf", "<package><manifest/></package>")
+        zf.writestr("EPUB/nav.xhtml", "<html><body/></html>")
+        zf.writestr("EPUB/toc.ncx", "<ncx/>")
+    with pytest.raises(EpubValidationError, match="mimetype"):
+        validate_epub(ruim)
+
+
+def test_validate_epub_rejeita_arquivo_inexistente(tmp_path):
+    with pytest.raises(EpubValidationError, match="não encontrado"):
+        validate_epub(tmp_path / "nao_existe.epub")
+
+
+def test_falha_de_validacao_nao_cria_destino(tmp_path, monkeypatch):
+    def explode(_path):
+        raise EpubValidationError("boom")
+
+    monkeypatch.setattr("backend.app.kdp_epub.validate_epub", explode)
+    destino = tmp_path / "saida.epub"
+    with pytest.raises(EpubValidationError):
+        build_epub(_caps(), "T", "A", "pt-BR", destino)
+    assert not destino.exists()
+    assert not list(tmp_path.glob("*.tmp-*"))

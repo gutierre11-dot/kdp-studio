@@ -8,10 +8,20 @@ invalido chega ao diretorio de saida.
 from __future__ import annotations
 
 import html
+import os
+import re
 import uuid
+import zipfile
 from pathlib import Path
 
 from .models import Chapter, Paragraph, Run
+
+_OBRIGATORIOS = ("META-INF/container.xml", "EPUB/content.opf",
+                 "EPUB/nav.xhtml", "EPUB/toc.ncx")
+
+
+class EpubValidationError(RuntimeError):
+    """O EPUB gerado nao passou na verificacao de integridade."""
 
 # CSS de leitura KDP: serif, justificado, recuo de primeira linha, quebra de
 # pagina nos titulos de capitulo e controle de viuvas/orfas.
@@ -86,7 +96,29 @@ def build_toc_tree(pares: list[tuple[int, object]]) -> list:
 
 def build_epub(chapters: list[Chapter], title: str, author: str, language: str,
                out_path: Path | str) -> Path:
-    """Escreve o EPUB 3 completo (capa e titulo + um XHTML por capitulo)."""
+    """Escreve o EPUB 3 de forma atomica, validando antes de publicar.
+
+    Monta num temporario no mesmo diretorio, valida a integridade e so entao
+    troca pelo arquivo final. Se a validacao falhar, nenhum EPUB invalido
+    aparece em `output/` e o temporario e removido.
+    """
+    destino = Path(out_path)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    temporario = destino.with_name(
+        f"{destino.stem}.tmp-{uuid.uuid4().hex}{destino.suffix}")
+    try:
+        _write_epub_file(chapters, title, author, language, temporario)
+        validate_epub(temporario)
+        os.replace(temporario, destino)
+    except BaseException:
+        temporario.unlink(missing_ok=True)
+        raise
+    return destino
+
+
+def _write_epub_file(chapters: list[Chapter], title: str, author: str,
+                     language: str, out_path: Path) -> Path:
+    """Montagem crua do arquivo (sem validacao nem atomicidade)."""
     from ebooklib import epub
 
     destino = Path(out_path)
@@ -131,3 +163,64 @@ def build_epub(chapters: list[Chapter], title: str, author: str, language: str,
     livro.add_item(epub.EpubNav())
     epub.write_epub(str(destino), livro)
     return destino
+
+
+def validate_epub(path: Path | str) -> None:
+    """Verifica a integridade do EPUB; levanta EpubValidationError se falhar.
+
+    Cobre as causas de rejeicao que ja apareceram na pratica: manifest
+    apontando para arquivos que nao existem no ZIP e ausencia de nav/ncx.
+    """
+    arquivo = Path(path)
+    if not arquivo.is_file():
+        raise EpubValidationError(f"EPUB não encontrado: {arquivo}")
+    try:
+        zf = zipfile.ZipFile(arquivo)
+    except zipfile.BadZipFile as exc:
+        raise EpubValidationError(f"EPUB não é um ZIP válido: {exc}") from exc
+
+    with zf:
+        infos = zf.infolist()
+        if not infos:
+            raise EpubValidationError("EPUB vazio.")
+        primeira = infos[0]
+        if primeira.filename != "mimetype":
+            raise EpubValidationError(
+                "A primeira entrada do EPUB deve ser 'mimetype'.")
+        if primeira.compress_type != zipfile.ZIP_STORED:
+            raise EpubValidationError(
+                "A entrada 'mimetype' deve estar sem compressão.")
+        if zf.read("mimetype") != b"application/epub+zip":
+            raise EpubValidationError("Conteúdo de 'mimetype' inválido.")
+
+        nomes = set(zf.namelist())
+        for obrigatorio in ("META-INF/container.xml", "EPUB/content.opf"):
+            if obrigatorio not in nomes:
+                raise EpubValidationError(
+                    f"EPUB sem o arquivo obrigatório {obrigatorio!r}.")
+
+        opf = zf.read("EPUB/content.opf").decode("utf-8", errors="replace")
+
+        hrefs = re.findall(r'href="([^"]+)"', opf)
+        ausentes = sorted({h for h in hrefs
+                           if not h.startswith(("http:", "https:", "#"))
+                           and f"EPUB/{h}" not in nomes})
+        if ausentes:
+            raise EpubValidationError(
+                "EPUB referencia arquivos ausentes: " + ", ".join(ausentes[:5]))
+
+        for obrigatorio in _OBRIGATORIOS[2:]:
+            if obrigatorio not in nomes:
+                raise EpubValidationError(
+                    f"EPUB sem o arquivo obrigatório {obrigatorio!r}.")
+
+        if 'properties="nav"' not in opf:
+            raise EpubValidationError(
+                "O item de navegação não está declarado com properties=\"nav\".")
+
+        ids = set(re.findall(r'<item\b[^>]*\bid="([^"]+)"', opf))
+        idrefs = re.findall(r'<itemref\b[^>]*\bidref="([^"]+)"', opf)
+        orfaos = sorted({i for i in idrefs if i not in ids})
+        if orfaos:
+            raise EpubValidationError(
+                "O spine referencia itens fora do manifest: " + ", ".join(orfaos))
