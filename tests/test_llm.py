@@ -100,6 +100,22 @@ def test_chat_respeita_limite_total_de_tempo(monkeypatch):
     assert len(chamadas) < 9  # nao percorre 3 rodadas x 3 modelos
 
 
+def test_erro_do_provedor_e_resumido(monkeypatch):
+    """O corpo JSON da API nao pode virar aviso gigante na interface."""
+    def fake_make_client(*, timeout, max_retries=0):
+        raise RuntimeError('Error code: 429 - [{"error": "quota exceeded", '
+                           '"detalhe": "' + "x" * 500 + '"}]')
+
+    monkeypatch.setattr(llm, "make_client", fake_make_client)
+    with pytest.raises(llm.LLMError) as capturado:
+        llm._call_once("m", "s", "u", 0.3)
+    mensagem = str(capturado.value)
+    assert "429" in mensagem
+    assert "cota" in mensagem
+    assert len(mensagem) < 80
+    assert "x" * 100 not in mensagem
+
+
 def test_call_once_usa_timeout_configurado(monkeypatch):
     capturado = {}
 

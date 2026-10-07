@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -104,6 +105,33 @@ def make_client(*, timeout: float | None = None, max_retries: int = 0) -> Any:
                    "(OPENAI_API_KEY/GEMINI_API_KEY).")
 
 
+# Bits de status HTTP -> explicacao curta para o usuario.
+_DICAS_HTTP = {
+    "401": "chave inválida",
+    "403": "acesso negado à API",
+    "404": "modelo inexistente ou descontinuado",
+    "429": "cota da API esgotada",
+    "500": "erro interno do provedor",
+    "503": "modelo indisponível no momento",
+}
+_CODIGO_RE = re.compile(r"Error code:\s*(\d{3})")
+
+
+def resumir_erro(exc: Exception) -> str:
+    """Mensagem curta e acionavel para um erro do provedor.
+
+    As excecoes do SDK carregam o corpo JSON inteiro da API (centenas de
+    caracteres, com links e detalhes de cota). Isso nao cabe num aviso de
+    interface, entao so o codigo e a dica sobrevivem.
+    """
+    achado = _CODIGO_RE.search(str(exc))
+    if achado:
+        codigo = achado.group(1)
+        dica = _DICAS_HTTP.get(codigo, "")
+        return f"HTTP {codigo}" + (f" ({dica})" if dica else "")
+    return type(exc).__name__
+
+
 def _call_once(model: str, system: str, user: str, temperature: float) -> str:
     """Uma unica chamada; converte qualquer falha do SDK em LLMError."""
     try:
@@ -119,7 +147,7 @@ def _call_once(model: str, system: str, user: str, temperature: float) -> str:
     except LLMError:
         raise
     except Exception as exc:  # rede, timeout, 404, 429, 503...
-        raise LLMError(f"{type(exc).__name__}: {exc}") from exc
+        raise LLMError(resumir_erro(exc)) from exc
     if not conteudo:
         raise LLMError(f"resposta vazia do modelo {model}")
     return conteudo
