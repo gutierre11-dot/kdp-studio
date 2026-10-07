@@ -277,55 +277,140 @@
     irParaPasso(1);
   }
 
-  /* ---------- lista de capítulos ---------- */
+  /* ---------- lista de capítulos (agrupada por capítulo de nível 1) ---------- */
+  function agrupar() {
+    const grupos = [];
+    estado.capitulos.forEach(cap => {
+      if (cap.level === 1 || !grupos.length) {
+        cap.aberto = cap.aberto !== false;
+        grupos.push({ pai: cap, filhos: [] });
+      } else {
+        grupos[grupos.length - 1].filhos.push(cap);
+      }
+    });
+    return grupos;
+  }
+
+  function aplicarInclusao(grupo, valor) {
+    grupo.pai.included = valor;
+    grupo.filhos.forEach(f => { f.included = valor; });
+  }
+
+  function moverGrupo(grupos, posicao, direcao) {
+    const destino = posicao + direcao;
+    if (destino < 0 || destino >= grupos.length) return;
+    const a = grupos[Math.min(posicao, destino)];
+    const b = grupos[Math.max(posicao, destino)];
+    const blocoA = [a.pai].concat(a.filhos);
+    const blocoB = [b.pai].concat(b.filhos);
+    const inicio = estado.capitulos.indexOf(a.pai);
+    const fim = estado.capitulos.indexOf(b.pai);
+    if (inicio < 0 || fim < 0 || inicio > fim) return;
+    estado.capitulos.splice(inicio, blocoA.length + blocoB.length,
+                            ...blocoB, ...blocoA);
+  }
+
+  function botao(rotulo, titulo, aoClicar, desabilitado) {
+    const b = document.createElement('button');
+    b.className = 'w-7 h-7 rounded-lg glass text-xs hover:bg-white/10 disabled:opacity-30';
+    b.textContent = rotulo;
+    b.title = titulo;
+    b.setAttribute('aria-label', titulo);
+    if (desabilitado) b.disabled = true;
+    b.addEventListener('click', aoClicar);
+    return b;
+  }
+
+  function linhaCapitulo(cap, contexto) {
+    const linha = document.createElement('div');
+    linha.className = 'chapter-row flex items-center gap-2 rounded-xl px-2 py-1.5' +
+      (cap.included ? '' : ' excluded');
+
+    const campo = document.createElement('input');
+    campo.className = 'field flex-1 min-w-0 px-2 py-1.5 text-sm';
+    campo.value = cap.title;
+    campo.setAttribute('aria-label', 'Título do capítulo');
+    campo.addEventListener('input', () => { cap.title = campo.value; });
+    linha.appendChild(campo);
+
+    if (contexto.ehPai) {
+      if (contexto.temFilhos) {
+        linha.appendChild(botao(cap.aberto ? '▾' : '▸',
+                                cap.aberto ? 'Recolher seções' : 'Expandir seções',
+                                () => { cap.aberto = !cap.aberto; renderizarCapitulos(); }));
+      }
+      linha.appendChild(botao('↑', 'Mover capítulo para cima',
+                              () => { moverGrupo(agrupar(), contexto.posicaoGrupo, -1);
+                                      renderizarCapitulos(); },
+                              contexto.posicaoGrupo === 0));
+      linha.appendChild(botao('↓', 'Mover capítulo para baixo',
+                              () => { moverGrupo(agrupar(), contexto.posicaoGrupo, 1);
+                                      renderizarCapitulos(); },
+                              contexto.ultimoGrupo));
+    }
+
+    const palavras = document.createElement('span');
+    palavras.className = 'text-[11px] text-slate-500 shrink-0 hidden sm:inline';
+    palavras.textContent = cap.words.toLocaleString('pt-BR') + ' pal.';
+    linha.appendChild(palavras);
+
+    const alternar = document.createElement('span');
+    alternar.className = 'toggle ' + (cap.included ? 'on' : '');
+    alternar.setAttribute('role', 'switch');
+    alternar.setAttribute('aria-checked', cap.included ? 'true' : 'false');
+    alternar.setAttribute('tabindex', '0');
+    alternar.title = 'Incluir ou excluir da exportação';
+    const disparar = () => {
+      if (contexto.ehPai && contexto.grupo) {
+        aplicarInclusao(contexto.grupo, !contexto.grupo.pai.included);
+      } else {
+        cap.included = !cap.included;
+      }
+      renderizarCapitulos();
+    };
+    alternar.addEventListener('click', disparar);
+    alternar.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); disparar(); }
+    });
+    linha.appendChild(alternar);
+
+    const ver = document.createElement('button');
+    ver.className = 'text-[11px] text-slate-400 hover:text-violet-300 underline shrink-0';
+    ver.textContent = 'prévia';
+    ver.addEventListener('click', () => abrirPrevia(cap.index));
+    linha.appendChild(ver);
+
+    if (!contexto.ehPai) linha.classList.add('bg-white/[.02]');
+    return linha;
+  }
+
   function renderizarCapitulos() {
     const lista = $('#chapters-list');
     lista.innerHTML = '';
-    estado.capitulos.forEach((cap, pos) => {
-      const linha = document.createElement('div');
-      linha.className = 'chapter-row rounded-xl px-3 py-2.5 border border-white/10 bg-white/[.03]' +
-        (cap.included ? '' : ' excluded');
-      linha.innerHTML =
-        '<div class="flex items-center gap-2">' +
-          '<span class="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-extrabold shrink-0" style="background:linear-gradient(135deg,#6366f1,#a855f7)">' + (pos + 1) + '</span>' +
-          '<input class="field flex-1 min-w-0 px-2 py-1.5 text-sm" data-k="title" value="' + escapeHtml(cap.title) + '" aria-label="Título do capítulo ' + (pos + 1) + '">' +
-          '<button class="w-7 h-7 rounded-lg glass text-xs hover:bg-white/10" data-a="up" title="Mover para cima" aria-label="Mover para cima"' + (pos === 0 ? ' disabled' : '') + '>↑</button>' +
-          '<button class="w-7 h-7 rounded-lg glass text-xs hover:bg-white/10" data-a="down" title="Mover para baixo" aria-label="Mover para baixo"' + (pos === estado.capitulos.length - 1 ? ' disabled' : '') + '>↓</button>' +
-          '<span class="toggle ' + (cap.included ? 'on' : '') + '" role="switch" tabindex="0" aria-checked="' + (cap.included ? 'true' : 'false') + '" data-a="toggle" title="Incluir ou excluir da exportação"></span>' +
-        '</div>' +
-        '<div class="flex items-center gap-3 mt-1 pl-9">' +
-          '<button class="text-[11px] text-slate-400 hover:text-violet-300 underline" data-a="open">ver prévia</button>' +
-          '<span class="text-[11px] text-slate-500">' + cap.words.toLocaleString('pt-BR') + ' palavras</span>' +
-        '</div>';
-
-      const campo = linha.querySelector('[data-k="title"]');
-      campo.addEventListener('input', () => { cap.title = campo.value; });
-      linha.querySelectorAll('[data-a]').forEach(botao => {
-        const acao = botao.dataset.a;
-        if (acao === 'open') {
-          botao.addEventListener('click', () => abrirPrevia(cap.index));
-          return;
-        }
-        const disparar = () => {
-          if (acao === 'toggle') cap.included = !cap.included;
-          if (acao === 'up' && pos > 0) {
-            const lista = estado.capitulos;
-            [lista[pos - 1], lista[pos]] = [lista[pos], lista[pos - 1]];
-          }
-          if (acao === 'down' && pos < estado.capitulos.length - 1) {
-            const lista = estado.capitulos;
-            [lista[pos + 1], lista[pos]] = [lista[pos], lista[pos + 1]];
-          }
-          renderizarCapitulos();
-        };
-        botao.addEventListener('click', disparar);
-        if (acao === 'toggle') {
-          botao.addEventListener('keydown', e => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); disparar(); }
-          });
-        }
-      });
-      lista.appendChild(linha);
+    const grupos = agrupar();
+    grupos.forEach((grupo, gi) => {
+      const cartao = document.createElement('div');
+      cartao.className = 'glass rounded-2xl p-2';
+      cartao.appendChild(linhaCapitulo(grupo.pai, {
+        ehPai: true,
+        grupo: grupo,
+        temFilhos: grupo.filhos.length > 0,
+        posicaoGrupo: gi,
+        ultimoGrupo: gi === grupos.length - 1,
+      }));
+      if (grupo.filhos.length && grupo.pai.aberto) {
+        const sub = document.createElement('div');
+        sub.className = 'mt-1 pl-3 border-l border-white/10 space-y-1';
+        grupo.filhos.forEach(filho => sub.appendChild(
+          linhaCapitulo(filho, { ehPai: false })));
+        cartao.appendChild(sub);
+      } else if (grupo.filhos.length) {
+        const resumo = document.createElement('p');
+        resumo.className = 'text-[11px] text-slate-500 pl-3 mt-1';
+        resumo.textContent = grupo.filhos.length + ' seções recolhidas';
+        cartao.appendChild(resumo);
+      }
+      lista.appendChild(cartao);
     });
     atualizarEstatisticas();
   }
