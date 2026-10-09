@@ -83,6 +83,119 @@ def test_heuristica_ignora_frase_do_corpo():
     assert detect_headings(linhas, 10.0) == []
 
 
+def test_heuristica_ignora_capitulo_no_meio_de_frase():
+    """A quebra de linha de um paragrafo pode comecar com "capitulo.".
+
+    Sem esta guarda a linha vira titulo nivel 1, sai do corpo e parte o
+    capitulo em dois no EPUB.
+    """
+    linhas = [_linha(0, "o fim do paragrafo anterior e o inicio do segundo", 10.0, 100),
+              _linha(0, "capitulo. A narrativa segue normalmente.", 10.0, 120)]
+    assert detect_headings(linhas, 10.0) == []
+
+
+def test_heuristica_ainda_detecta_capitulo_numerado_e_por_extenso():
+    linhas = [_linha(0, "Capítulo 7", 10.0, 40),
+              _linha(0, "Capítulo Um", 10.0, 60),
+              _linha(0, "Parte IV", 10.0, 80)]
+    det = detect_headings(linhas, 10.0)
+    assert [titulo for _, _, titulo in det] == ["Capítulo 7", "Capítulo Um",
+                                                "Parte IV"]
+    assert [nivel for _, nivel, _ in det] == [1, 1, 1]
+
+
+def test_heuristica_ignora_materia_no_meio_de_frase():
+    linhas = [_linha(0, "Conclusão. O país mudou muito desde então.", 10.0, 120)]
+    assert detect_headings(linhas, 10.0) == []
+
+
+def test_heuristica_detecta_materia_isolada():
+    linhas = [_linha(0, "Prefácio", 10.0, 40),
+              _linha(0, "Sumário", 10.0, 200)]
+    det = detect_headings(linhas, 10.0)
+    assert [titulo for _, _, titulo in det] == ["Prefácio", "Sumário"]
+
+
+def test_heuristica_ignora_nota_de_rodape_numerada():
+    """Notas comecam com "1 texto"; so "1. Titulo" e titulo numerado."""
+    linhas = [_linha(0, "1 Tradução de João Barrento, cuja 2ª edição", 10.0, 120),
+              _linha(0, "7 Lucas 11:13", 10.0, 200)]
+    assert detect_headings(linhas, 10.0) == []
+
+
+def test_heuristica_detecta_titulo_numerado_com_ponto():
+    linhas = [_linha(0, "1.2 Quadro geral", 10.0, 40),
+              _linha(0, "1. Os antigos", 10.0, 120)]
+    det = detect_headings(linhas, 10.0)
+    assert [titulo for _, _, titulo in det] == ["1.2 Quadro geral", "1. Os antigos"]
+
+
+def test_heuristica_nivel_segue_profundidade_da_numeracao():
+    linhas = [_linha(0, "1. Os antigos", 10.0, 40),
+              _linha(0, "1.2 Quadro geral", 10.0, 80)]
+    det = detect_headings(linhas, 10.0)
+    assert [(titulo, nivel) for _, nivel, titulo in det] == [("1. Os antigos", 2),
+                                                             ("1.2 Quadro geral", 3)]
+
+
+def test_heuristica_titulo_romano_e_nivel_de_parte():
+    linhas = [_linha(0, "IV. Resultados", 11.5, 40, bold=True)]
+    assert detect_headings(linhas, 10.0) == [(0, 1, "IV. Resultados")]
+
+
+def test_heuristica_ignora_romano_no_meio_do_corpo():
+    """Sem fonte de titulo, "II. Esses lutam..." no corpo nao vira capitulo."""
+    linhas = [_linha(0, "II. Esses lutam pela fé da igreja e pelas leis morais",
+                     12.0, 300)]
+    assert detect_headings(linhas, 12.0) == []
+
+
+def test_remove_pagina_impressa_colada_ao_titulo():
+    """A pagina impressa sai na mesma linha do titulo em alguns PDFs."""
+    linhas = [_linha(0, "II. O Proprietário 190", 11.5, 40, bold=True),
+              _linha(0, "2. Meu intercurso com os homens 237", 10.0, 120)]
+    det = detect_headings(linhas, 10.0)
+    assert [titulo for _, _, titulo in det] == ["II. O Proprietário",
+                                                "2. Meu intercurso com os homens"]
+    assert [nivel for _, nivel, _ in det] == [1, 2]
+
+
+def test_numero_do_proprio_titulo_nao_e_removido():
+    linhas = [_linha(0, "Capítulo 1", 10.0, 40),
+              _linha(0, "Parte IV", 10.0, 80),
+              _linha(0, "1. Os antigos", 10.0, 120)]
+    det = detect_headings(linhas, 10.0)
+    assert [titulo for _, _, titulo in det] == ["Capítulo 1", "Parte IV",
+                                                "1. Os antigos"]
+
+
+def test_heuristica_ignora_parte_no_meio_do_paragrafo():
+    """"parte de nossa propriedade..." e prosa, nao o titulo "Parte IV"."""
+    linhas = [_linha(0, "parte de nossa propriedade se torne estável, e nos", 10.0, 100),
+              _linha(0, "Parte da eficácia dos intelectos sacerdotais é o que", 10.0, 140)]
+    assert detect_headings(linhas, 10.0) == []
+
+
+def test_heuristica_detecta_parte_com_numeral_ou_extenso():
+    linhas = [_linha(0, "Parte IV", 10.0, 40),
+              _linha(0, "Parte Dois", 10.0, 80)]
+    det = detect_headings(linhas, 10.0)
+    assert [titulo for _, _, titulo in det] == ["Parte IV", "Parte Dois"]
+
+
+def test_heuristica_materia_aceita_continuacao_minuscula():
+    """"Notas do tradutor" e titulo; a guarda de prosa vale so para capitulo."""
+    linhas = [_linha(0, "Notas do tradutor", 10.0, 40)]
+    det = detect_headings(linhas, 10.0)
+    assert [titulo for _, _, titulo in det] == ["Notas do tradutor"]
+
+
+def test_heuristica_ignora_linha_do_sumario_com_lideres():
+    linhas = [_linha(0, "1. Os antigos … 13", 10.0, 40),
+              _linha(0, "Introdução ...I", 10.0, 80)]
+    assert detect_headings(linhas, 10.0) == []
+
+
 def test_heuristica_ignora_numero_de_pagina():
     linhas = [_linha(0, "42", 10.0, 780, h=800.0)]
     assert detect_headings(linhas, 10.0) == []
@@ -194,6 +307,29 @@ def test_build_chapters_pdf_sem_texto(tmp_path):
     chs, avisos = build_chapters(p)
     assert len(chs) == 1
     assert "sem texto" in " ".join(avisos).lower()
+
+
+def test_build_chapters_nao_parte_paragrafo_com_capitulo_no_inicio(tmp_path):
+    """Regressao: "capitulo." abrindo uma linha de corpo nao e um titulo."""
+    import pymupdf
+
+    p = tmp_path / "colado.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 90), "O trem chegou atrasado naquela manha fria e o",
+                     fontsize=12)
+    page.insert_text((72, 110), "capitulo. A narrativa segue normalmente por",
+                     fontsize=12)
+    page.insert_text((72, 130), "varias linhas seguidas sem titulo nenhum.",
+                     fontsize=12)
+    doc.save(str(p))
+    doc.close()
+
+    chs, _ = build_chapters(p)
+    assert len(chs) == 1
+    assert "capitulo" not in chs[0].title.lower()
+    corpo = " ".join(par.text for par in chs[0].paragraphs).lower()
+    assert "narrativa" in corpo
 
 
 def test_build_chapters_usa_outline(make_bookmark_pdf):

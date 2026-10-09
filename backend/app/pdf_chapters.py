@@ -131,14 +131,109 @@ def outline_coverage(anchors: list[Anchor], outline: list[list]) -> float:
 
 _CHAPTER_START_RE = re.compile(r"^(cap[íi]tulo|chapter|parte|part)\b",
                                re.IGNORECASE)
-_NUMBERED_RE = re.compile(r"^\d+(?:\.\d+)*\s+\S")
+# Titulos numerados: "1.2 Titulo" ou "1. Titulo". O ponto e obrigatorio — sem
+# ele, "1 Traducao de Joao Barrento" (nota de rodape numerada) viraria titulo e
+# um livro com notas sairia com centenas de capitulos falsos.
+_NUMBERED_RE = re.compile(r"^(?:\d+(?:\.\d+)+|\d+\.)\s+\S")
 _FRONT_MATTER_RE = re.compile(
     r"^(pref[áa]cio|introdu[çc][ãa]o|conclus[ãa]o|ep[íi]logo|ap[êe]ndice|"
     r"agradecimentos|bibliografia|[íi]ndice|sum[áa]rio|notas?)\b",
     re.IGNORECASE,
 )
+# Numero ou numeral romano logo apos a palavra-chave ("Capitulo 7",
+# "Parte IV"): e numeracao de titulo, nunca comeco de frase.
+_TITULO_NUMERADO_RE = re.compile(r"^[\dIVXLCDM]+\b")
+# Pontuacao de fim de frase seguida de mais texto ("capitulo. O texto...").
+_FIM_DE_FRASE_RE = re.compile(r"[.!?]\s+\S")
+# Separadores que podem vir depois da palavra-chave ("Parte - A Queda").
+_SEPARADOR_RE = re.compile(r"^[:;—–-]+")
+# Linha do sumario do proprio PDF: "1. Os antigos … 13". Os lideres de pontos
+# seguidos da pagina denunciam a entrada, que nao e um titulo do corpo.
+_TOC_LINE_RE = re.compile(r"(?:\.{2,}|…)\s*[\divxlcdmIVXLCDM]*\s*$")
+# Numero isolado no fim da linha: a pagina impressa veio colada ao titulo
+# ("II. O Proprietario 190").
+_NUMERO_FINAL_RE = re.compile(r"\s+\d{1,4}$")
+# Marcador que abre um titulo ("Capitulo 7", "1.2", "IV."). Removido para
+# revelar se sobra texto de titulo antes do numero final.
+_MARCADOR_INICIO_RE = re.compile(
+    r"^(?:(?:cap[íi]tulo|chapter|parte|part)\b\.?\s*"
+    r"(?:\d+(?:\.\d+)*|[IVXLCDM]+)?"
+    r"|\d+(?:\.\d+)*\.?"
+    r"|[IVXLCDM]+\.)",
+    re.IGNORECASE,
+)
+# Titulo com numeracao romana propria ("II. O Proprietario"): e um nivel de
+# parte/capitulo, normalmente acima das secoes numeradas em arabico.
+_TITULO_ROMANO_RE = re.compile(r"^[IVXLCDM]{1,8}\.\s+\S")
 _MAX_TITLE_LEN = 90
 _FOOTER_BAND = 0.9
+
+
+def _sem_numero_de_pagina(texto: str) -> str:
+    """Tira a pagina impressa extraida junto do titulo.
+
+    "II. O Proprietario 190" e o titulo "II. O Proprietario" com a pagina 190
+    na mesma linha. So remove quando ja existe numeracao propria no titulo;
+    assim "Capitulo 1", cujo numero faz parte do titulo, fica intacto.
+    """
+    achado = _NUMERO_FINAL_RE.search(texto)
+    if not achado:
+        return texto
+    prefixo = texto[:achado.start()].rstrip()
+    sem_marcador = _MARCADOR_INICIO_RE.sub("", prefixo, count=1).strip(" .:;-–—")
+    if re.search(r"[^\W\d_]{2,}", sem_marcador):
+        return prefixo
+    return texto
+
+
+def _nivel_numerado(texto: str) -> int:
+    """Profundidade da numeracao: "1." e subsecao, "1.2" e sub-subsecao."""
+    primeiro = texto.split(maxsplit=1)[0].rstrip(".")
+    return 3 if "." in primeiro else 2
+
+
+def _parece_inicio_de_frase(resto: str) -> bool:
+    """True quando `resto` continua uma frase em vez de completar um titulo.
+
+    A quebra de linha de um paragrafo pode comecar uma linha com
+    "capitulo. A narrativa segue..." — sem esta guarda a linha vira titulo e
+    parte o capitulo em dois (a linha sai do corpo e o sumario fica errado).
+    """
+    if not resto:
+        return False
+    if _TITULO_NUMERADO_RE.match(resto):
+        return False
+    return bool(_FIM_DE_FRASE_RE.search(resto)) or resto.endswith((".", "!", "?"))
+
+
+def _continuacao_e_titulo(resto: str) -> bool:
+    """True quando o que segue "capitulo"/"parte" parece titulo, nao prosa.
+
+    "parte de nossa propriedade se torne estavel" e uma frase do corpo que
+    comeca com a palavra "parte"; ja "Parte IV" e "Capitulo Um" sao titulos.
+    O que separa os dois e a continuacao: titulo comeca com numero ou
+    maiuscula, prosa continua em minuscula.
+    """
+    if not resto:
+        return True
+    limpo = _SEPARADOR_RE.sub("", resto).strip()
+    if not limpo:
+        return True
+    return limpo[0].isdigit() or limpo[0].isupper()
+
+
+def _casa_titulo(padrao: re.Pattern[str], texto: str,
+                 *, exigir_continuacao_titulo: bool = False) -> bool:
+    """`padrao` no inicio da linha, descartando continuacao de frase."""
+    achado = padrao.match(texto)
+    if not achado:
+        return False
+    resto = texto[achado.end():].strip()
+    if _parece_inicio_de_frase(resto):
+        return False
+    if exigir_continuacao_titulo and not _continuacao_e_titulo(resto):
+        return False
+    return True
 
 
 def detect_headings(lines: list[Line], body_size: float) -> list[Anchor]:
@@ -159,18 +254,27 @@ def detect_headings(lines: list[Line], body_size: float) -> list[Anchor]:
             continue
         if texto.isdigit():
             continue
-        capitulo = bool(_CHAPTER_START_RE.match(texto))
-        materias = bool(_FRONT_MATTER_RE.match(texto))
+        if _TOC_LINE_RE.search(texto):
+            continue
+        capitulo = _casa_titulo(_CHAPTER_START_RE, texto,
+                                exigir_continuacao_titulo=True)
+        materias = _casa_titulo(_FRONT_MATTER_RE, texto)
         numerado = bool(_NUMBERED_RE.match(texto))
         grande = linha.size >= h1_min
         medio = linha.size >= h2_min and (linha.bold or texto.isupper())
+        # O numeral romano sinaliza nivel de parte, nao deteccao: so vale para
+        # linha ja visualmente de titulo. Sem isso, um trecho de corpo que
+        # comece com "II. Esses lutam..." viraria capitulo.
+        romano = (grande or medio) and bool(_TITULO_ROMANO_RE.match(texto))
         if not (capitulo or materias or numerado or grande or medio):
             continue
-        if capitulo or materias or grande:
+        if capitulo or materias or romano or grande:
             nivel = 1
+        elif numerado:
+            nivel = _nivel_numerado(texto)
         else:
             nivel = 2
-        achados.append((i, nivel, texto))
+        achados.append((i, nivel, _sem_numero_de_pagina(texto)))
     return achados
 
 
