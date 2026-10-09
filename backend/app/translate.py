@@ -14,10 +14,14 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Callable
 
 from . import llm
-from .models import Chapter, Paragraph
+from .models import Chapter, Paragraph, Run
 
 DEFAULT_TARGET_LANG = "pt-BR"
 DEFAULT_SOURCE_LANG = "auto"
+
+# Token que substitui um chamador de nota superscript durante a traducao. O
+# formato com colchetes matematicos e raro no texto e sobrevive ao modelo.
+_TOKEN_RE = re.compile(r"⟦(\d{1,3})⟧")
 
 
 class CancelledError(RuntimeError):
@@ -133,6 +137,9 @@ def build_system_prompt(source_lang: str | None = None,
                   "próprios, tom literário e formatação.")
     partes.append("Mantenha EXATAMENTE a mesma quantidade de parágrafos, "
                   "separados por uma linha em branco.")
+    partes.append("Preserve exatamente os tokens no formato ⟦N⟧ "
+                  "(por exemplo ⟦7⟧): não os traduza, não os remova e "
+                  "mantenha-os na posição correspondente.")
     partes.append("Retorne APENAS a tradução, sem comentários, títulos ou notas.")
     contexto = []
     if title:
@@ -237,30 +244,104 @@ def montar_unidades(paragrafos: list[str],
     return unidades
 
 
+def _numeros_superscript(paragrafo: Paragraph) -> list[int]:
+    """Numeros dos runs superscript (chamadores de nota) do paragrafo."""
+    return [int(r.text.strip()) for r in paragrafo.runs
+            if getattr(r, "superscript", False) and r.text.strip().isdigit()]
+
+
+def _tokenizar(paragrafo: Paragraph) -> str:
+    """Texto do paragrafo com cada chamador superscript trocado por ⟦N⟧.
+
+    O token viaja pelo modelo na posicao original; a reconstrucao usa essa
+    posicao para devolver o run superscript.
+    """
+    partes: list[str] = []
+    for run in paragrafo.runs:
+        texto = run.text or ""
+        if getattr(run, "superscript", False) and texto.strip().isdigit():
+            partes.append(f"⟦{int(texto.strip())}⟧")
+        else:
+            partes.append(texto)
+    return "".join(partes)
+
+
+def _reconstruir_paragrafo(original: Paragraph, tokenizado: str,
+                           traduzido: str) -> tuple[Paragraph, list[int]]:
+    """Devolve `(paragrafo, numeros_perdidos)` a partir da traducao.
+
+    Tokens encontrados viram runs superscript nos pontos correspondentes. Um
+    token que o modelo removeu nao descarta conteudo: o chamador e reanexado ao
+    final e reportado em `numeros_perdidos`.
+    """
+    if traduzido == tokenizado:
+        return original, []
+    partes = _TOKEN_RE.split(traduzido)
+    runs: list[Run] = []
+    encontrados: set[int] = set()
+    for i, parte in enumerate(partes):
+        if i % 2 == 1:  # grupo capturado = numero do chamador
+            runs.append(Run(parte, superscript=True))
+            encontrados.add(int(parte))
+        elif parte:
+            runs.append(Run(parte))
+    perdidos = [n for n in _numeros_superscript(original)
+                if n not in encontrados]
+    for numero in perdidos:
+        runs.append(Run(str(numero), superscript=True))
+    if not runs:
+        return original, perdidos
+    return Paragraph(runs=runs), perdidos
+
+
+def _reconstruir_paragrafos(originais: list[Paragraph],
+                            tokenizados: list[str], novos: list[str],
+                            warn: Callable[[str], None]) -> list[Paragraph]:
+    """Reconstroi os runs (e chamadores) apos a traducao."""
+    saida: list[Paragraph] = []
+    for original, tokenizado, traduzido in zip(originais, tokenizados, novos):
+        paragrafo, perdidos = _reconstruir_paragrafo(original, tokenizado,
+                                                     traduzido)
+        if perdidos:
+            marcados = ", ".join(f"⟦{n}⟧" for n in perdidos)
+            warn(f"Nota(s) {marcados}: o tradutor removeu o chamador; "
+                 "ele foi reanexado ao final do parágrafo.")
+        saida.append(paragrafo)
+    return saida
+
+
 def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
                       target_lang: str, model: str | None, chunk_chars: int,
                       warn: Callable[[str], None]) -> Chapter:
     """Traduz um capitulo preservando a contagem de paragrafos."""
-    paragrafos = [p.text for p in chapter.paragraphs]
-    if not paragrafos:
-        return Chapter(chapter.title, chapter.level, [])
+    if not chapter.paragraphs:
+        return Chapter(chapter.title, chapter.level, [],
+                       continues=chapter.continues,
+                       notes=list(chapter.notes),
+                       title_refs=list(chapter.title_refs))
+    tokenizados = [_tokenizar(p) for p in chapter.paragraphs]
     sistema = build_system_prompt(source_lang, target_lang, title=title,
                                   chapter_title=chapter.title)
     titulo = _traduzir_titulo(chapter.title, build_title_prompt(target_lang),
                               model, warn, chapter.title)
 
     por_indice: dict[int, list[str]] = {}
-    for indices, texto in montar_unidades(paragrafos, chunk_chars):
+    for indices, texto in montar_unidades(tokenizados, chunk_chars):
         traduzidos = _traduzir_bloco(texto, len(indices), sistema, model,
                                      warn, chapter.title)
         for i, trecho in zip(indices, traduzidos):
             por_indice.setdefault(i, []).append(trecho)
 
     novos: list[str] = []
-    for i, original in enumerate(paragrafos):
+    for i, original in enumerate(tokenizados):
         partes = [p.strip() for p in por_indice.get(i, []) if p.strip()]
         novos.append(" ".join(partes) if partes else original)
-    return Chapter(titulo, chapter.level, [Paragraph.from_text(t) for t in novos])
+    return Chapter(titulo, chapter.level,
+                   _reconstruir_paragrafos(chapter.paragraphs, tokenizados,
+                                           novos, warn),
+                   continues=chapter.continues,
+                   notes=list(chapter.notes),
+                   title_refs=list(chapter.title_refs))
 
 
 def translate_chapters(
@@ -280,11 +361,13 @@ def translate_chapters(
         return [], []
 
     unidades: list[tuple[int, list[int] | None, str]] = []
+    tokenizados_por_cap: dict[int, list[str]] = {}
     for ci, capitulo in enumerate(chapters):
         if capitulo.title.strip():
             unidades.append((ci, None, capitulo.title))
-        for indices, texto in montar_unidades([p.text for p in capitulo.paragraphs],
-                                              chunk_chars):
+        tokenizados = [_tokenizar(p) for p in capitulo.paragraphs]
+        tokenizados_por_cap[ci] = tokenizados
+        for indices, texto in montar_unidades(tokenizados, chunk_chars):
             unidades.append((ci, indices, texto))
     if not unidades:
         if progress is not None:
@@ -362,13 +445,18 @@ def translate_chapters(
 
     saida: list[Chapter] = []
     for ci, capitulo in enumerate(chapters):
-        paragrafos = [p.text for p in capitulo.paragraphs]
+        tokenizados = tokenizados_por_cap[ci]
         novos: list[str] = []
-        for i, original in enumerate(paragrafos):
+        for i, original in enumerate(tokenizados):
             partes = [p.strip() for p in traducao[ci].get(i, []) if p.strip()]
             novos.append(" ".join(partes) if partes else original)
-        saida.append(Chapter(titulos.get(ci, capitulo.title), capitulo.level,
-                             [Paragraph.from_text(t) for t in novos]))
+        saida.append(Chapter(
+            titulos.get(ci, capitulo.title), capitulo.level,
+            _reconstruir_paragrafos(capitulo.paragraphs, tokenizados, novos,
+                                    avisos.append),
+            continues=capitulo.continues,
+            notes=list(capitulo.notes),
+            title_refs=list(capitulo.title_refs)))
 
     mudou = any(
         novo != original

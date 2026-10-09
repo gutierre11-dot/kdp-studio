@@ -137,7 +137,10 @@ def _selecionar_capitulos(job: JobState, selecao: Any, edicoes: Any) -> list[Cha
         bruto = edicoes.get(str(indice))
         if isinstance(bruto, list):
             paragrafos = [Paragraph.from_text(str(p)) for p in bruto]
-        saida.append(Chapter(titulo or capitulo.title, capitulo.level, paragrafos))
+        saida.append(Chapter(titulo or capitulo.title, capitulo.level, paragrafos,
+                             continues=capitulo.continues,
+                             notes=list(capitulo.notes),
+                             title_refs=list(capitulo.title_refs)))
     return saida
 
 

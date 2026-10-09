@@ -15,9 +15,11 @@ except ImportError:  # pragma: no cover - compatibilidade com versoes antigas
 
 from .models import Line, Run
 
-# Bits de `span["flags"]` (PyMuPDF): 1<<4 = negrito, 1<<1 = italico.
+# Bits de `span["flags"]` (PyMuPDF): 1<<4 = negrito, 1<<1 = italico,
+# 1<<0 = superscript (chamador de nota).
 _FLAG_BOLD = 1 << 4
 _FLAG_ITALIC = 1 << 1
+_FLAG_SUPERSCRIPT = 1 << 0
 
 
 def extract_lines(pdf_path: Path | str) -> tuple[list[Line], int, list[list]]:
@@ -50,10 +52,11 @@ def extract_lines(pdf_path: Path | str) -> tuple[list[Line], int, list[list]]:
                         flags = int(s.get("flags", 0))
                         s_bold = bool(flags & _FLAG_BOLD)
                         s_italic = bool(flags & _FLAG_ITALIC)
+                        s_sup = bool(flags & _FLAG_SUPERSCRIPT)
                         bold = bold or s_bold
                         italic = italic or s_italic
                         runs.append(Run(str(s["text"]), italic=s_italic,
-                                        bold=s_bold))
+                                        bold=s_bold, superscript=s_sup))
                     bbox = tuple(float(v) for v in linha.get("bbox", (0, 0, 0, 0)))
                     linhas.append(Line(
                         page=pno,

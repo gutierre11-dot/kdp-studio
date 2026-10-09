@@ -22,6 +22,8 @@ class Run:
     text: str
     italic: bool = False
     bold: bool = False
+    # Chamador de nota de rodape (superscript): preservado para virar link.
+    superscript: bool = False
 
 
 @dataclass(slots=True)
@@ -61,6 +63,14 @@ class Chapter:
     title: str
     level: int
     paragraphs: list[Paragraph]
+    # Parte de continuacao de um capitulo longo dividido em varios arquivos:
+    # entra no spine, mas sem cabecalho proprio nem entrada no sumario.
+    continues: bool = False
+    # Notas de rodape do capitulo, renderizadas como endnotes ao final dele.
+    notes: list[tuple[int, str]] = field(default_factory=list)
+    # Chamadores de nota que estao na propria linha do titulo (nao no corpo):
+    # viram links no heading e entram na associacao de notas.
+    title_refs: list[int] = field(default_factory=list)
 
     @property
     def words(self) -> int:

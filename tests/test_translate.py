@@ -4,7 +4,7 @@ import threading
 import pytest
 
 from backend.app.llm import LLMError
-from backend.app.models import Chapter, Paragraph
+from backend.app.models import Chapter, Paragraph, Run
 from backend.app.translate import (
     CancelledError,
     build_system_prompt,
@@ -269,3 +269,92 @@ def test_cancelamento_funciona_com_todas_as_unidades_em_voo(monkeypatch):
         translate_chapters(chs, title="L", source_lang="en", target_lang="pt-BR",
                            model=None, workers=4, chunk_chars=6000,
                            progress=prog, cancel=evento)
+
+
+# ---------------------------------------------------------------------------
+# Chamadores de nota sobrevivem a traducao via tokens (F2)
+# ---------------------------------------------------------------------------
+
+
+def _cap_com_chamador():
+    return Chapter(
+        "Chapter One", 1,
+        [Paragraph([Run("the men "), Run("7", superscript=True),
+                    Run("rule.")])],
+        title_refs=[7], notes=[(7, "a note.")])
+
+
+def test_prompt_instrui_preservar_tokens():
+    p = build_system_prompt("en", "pt-BR")
+    assert "⟦N⟧" in p or "⟦" in p
+
+
+def test_traducao_reconstroi_chamador_na_posicao(monkeypatch):
+    vistos = []
+
+    def fake(text, **k):
+        vistos.append(text)
+        return text.replace("the men", "os homens").replace("rule", "regem")
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    out = translate_chapter(_cap_com_chamador(), title="L", source_lang="en",
+                            target_lang="pt-BR", model=None, chunk_chars=6000,
+                            warn=lambda m: None)
+    corpo = out.paragraphs[0]
+    assert "⟦" not in corpo.text and "⟧" not in corpo.text
+    assert corpo.text == "os homens 7regem."
+    runs = corpo.runs
+    assert any(r.superscript and r.text == "7" for r in runs)
+    # o token foi realmente enviado ao modelo
+    assert any("⟦7⟧" in t for t in vistos)
+    # nota preservada
+    assert [n for n, _ in out.notes] == [7]
+    assert out.title_refs == [7]
+
+
+def test_traducao_que_perde_token_reanexa_o_chamador(monkeypatch):
+    import re
+
+    def fake(text, **k):
+        return re.sub(r"⟦\d+⟧", "", text).replace("the men", "os homens")
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    avisos = []
+    out = translate_chapter(_cap_com_chamador(), title="L", source_lang="en",
+                            target_lang="pt-BR", model=None, chunk_chars=6000,
+                            warn=avisos.append)
+    corpo = out.paragraphs[0]
+    assert "⟦" not in corpo.text
+    assert corpo.runs[-1].superscript and corpo.runs[-1].text == "7"
+    assert any("chamador" in a.lower() or "nota" in a.lower() for a in avisos)
+
+
+def test_traducao_preserva_continues_notes_e_title_refs(monkeypatch):
+    monkeypatch.setattr("backend.app.translate._translate_text",
+                        lambda t, **k: t)
+    ch = Chapter("T", 1, [Paragraph.from_text("alpha")], continues=True,
+                 notes=[(3, "nota")], title_refs=[3])
+    out = translate_chapter(ch, title="L", source_lang="en", target_lang="pt-BR",
+                            model=None, chunk_chars=6000, warn=lambda m: None)
+    assert out.continues is True
+    assert out.notes == [(3, "nota")]
+    assert out.title_refs == [3]
+
+
+def test_traducao_em_lote_reconstroi_chamadores(monkeypatch):
+    def fake(text, **k):
+        return text.replace("alpha", "ALFA").replace("beta", "BETA")
+
+    monkeypatch.setattr("backend.app.translate._translate_text", fake)
+    ch = Chapter("T", 1,
+                 [Paragraph([Run("alpha "), Run("9", superscript=True)]),
+                  Paragraph.from_text("beta")],
+                 title_refs=[9], notes=[(9, "nove")])
+    out, avisos = translate_chapters([ch], title="L", source_lang="en",
+                                     target_lang="pt-BR", model=None, workers=1,
+                                     chunk_chars=6000)
+    assert not avisos
+    runs = out[0].paragraphs[0].runs
+    assert runs[-1].superscript and runs[-1].text == "9"
+    assert out[0].title_refs == [9]
+    assert out[0].notes == [(9, "nove")]

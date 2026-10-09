@@ -1,15 +1,18 @@
 """Testes da deteccao de capitulos a partir do PDF."""
-from backend.app.models import Chapter, Line, Paragraph
+from backend.app.models import Chapter, Line, Paragraph, Run
 from backend.app.pdf_chapters import (
     anchor_outline,
+    anchor_printed_outline,
     assemble_chapters,
     build_chapters,
     detect_headings,
+    extract_notes,
     is_page_number,
     join_paragraphs,
     merge_empty_parents,
     modal_body_size,
     normalize,
+    parse_printed_toc,
     remove_running_lines,
     sanitize,
 )
@@ -19,6 +22,23 @@ def _linha(page, text, size, y, bold=False, h=800.0):
     return Line(page=page, text=text, size=size, bold=bold, italic=False,
                 bbox=(72.0, y, 500.0, y + size), page_height=h, page_width=600.0,
                 runs=[])
+
+
+def _linha_bbox(page, text, size, y, *, x0=72.0, x1=500.0, bold=False,
+                runs=None, h=800.0):
+    """Linha com bbox estreito e runs explicitos (para testar isolamento)."""
+    return Line(page=page, text=text, size=size, bold=bold, italic=False,
+                bbox=(x0, y, x1, y + size), page_height=h, page_width=600.0,
+                runs=runs if runs is not None else [])
+
+
+def _linha_sup(page, texto, size, y, numero, h=800.0):
+    """Linha de corpo com um chamador de nota superscript numerico."""
+    return Line(page=page, text=f"{texto} {numero}.", size=size, bold=False,
+                italic=False, bbox=(72.0, y, 500.0, y + size), page_height=h,
+                page_width=600.0,
+                runs=[Run(texto + " "), Run(str(numero), superscript=True),
+                      Run(".")])
 
 
 def test_normalize_remove_acentos_pontuacao_e_caixa():
@@ -362,3 +382,377 @@ def test_nao_funde_capitulo_vazio_sem_filho():
            Chapter("Texto", 1, [Paragraph.from_text("x")])]
     out = merge_empty_parents(chs)
     assert [c.title for c in out] == ["Cover", "Texto"]
+
+
+# ---------------------------------------------------------------------------
+# Regressao: sobreposicao natural de bbox nao quebra paragrafo (F1)
+# ---------------------------------------------------------------------------
+
+
+def test_junta_linhas_com_sobreposicao_natural_de_bbox():
+    """PyMuPDF sobrepoe bboxes de linha ~2pt; isso nao separa paragrafo."""
+    linhas = [_linha(0, "a primeira linha do paragrafo que ocupa toda a coluna",
+                     10.0, 100),
+              _linha(0, "e continua na segunda linha logo abaixo", 10.0, 107.5)]
+    paras = join_paragraphs(linhas)
+    assert len(paras) == 1
+    assert "segunda linha" in paras[0].text
+
+
+# ---------------------------------------------------------------------------
+# Heuristica: titulos negritos menores que o corpo (F2)
+# ---------------------------------------------------------------------------
+
+
+def test_heuristica_detecta_titulo_bold_menor_isolado():
+    """Titulo negrito com fonte <= corpo mas isolado (curto) e capitulo."""
+    larga = _linha(0, "linha de corpo larga que ocupa toda a coluna do livro",
+                   10.0, 120)
+    titulo = _linha_bbox(0, "Uma abordagem prática", 10.0, 40, x1=192.0,
+                         bold=True)
+    det = detect_headings([larga, titulo], 10.0)
+    assert det == [(1, 2, "Uma abordagem prática")]
+
+
+def test_heuristica_ignora_negrito_em_linha_larga():
+    """Negrito que ocupa a coluna inteira e verso de corpo, nao titulo."""
+    linhas = [_linha_bbox(
+        0, "Linha inteira de corpo em negrito que ocupa toda a coluna",
+        10.0, 120, x1=500.0, bold=True)]
+    assert detect_headings(linhas, 10.0) == []
+
+
+def test_heuristica_ignora_negrito_nao_dominante():
+    """Uma unica palavra em negrito no meio da linha nao faz um titulo."""
+    larga = _linha(0, "linha de corpo larga que ocupa toda a coluna do livro",
+                   10.0, 120)
+    candidata = _linha_bbox(
+        0, "texto com uma palavra destacada apenas", 10.0, 40, x1=232.0,
+        runs=[Run("texto com uma "), Run("palavra", bold=True),
+              Run(" destacada apenas")])
+    assert detect_headings([larga, candidata], 10.0) == []
+
+
+# ---------------------------------------------------------------------------
+# Indice impresso como outline (F3/F4)
+# ---------------------------------------------------------------------------
+
+
+def _linha_indice(page, texto, y, *, size=10.0, x1=240.0, bold=False):
+    return _linha_bbox(page, texto, size, y, x1=x1, bold=bold)
+
+
+def test_parse_printed_toc_extrai_entradas_e_indices_do_bloco():
+    linhas = [
+        _linha_bbox(0, "Índice", 12.0, 40, x1=132.0, bold=True),
+        _linha_indice(0, "Introdução ... I", 70),
+        _linha_indice(0, "Primeira Parte- O ser humano", 100, x1=282.0,
+                      bold=True),
+        _linha_indice(0, "I. Uma vida humana ... 06", 130, x1=252.0),
+        _linha_indice(0, "§1- O espírito … 25", 160, x1=202.0),
+        _linha_indice(0, "a) O fantasma … 35", 190, x1=192.0),
+        _linha(0, "x" * 60, 10.0, 300),  # largura maxima do corpo
+        _linha(1, "Corpo do livro", 20.0, 90),
+    ]
+    entradas, bloco = parse_printed_toc(linhas)
+    assert [t for _, t, _ in entradas] == [
+        "Introdução", "Primeira Parte- O ser humano", "I. Uma vida humana",
+        "§1- O espírito", "a) O fantasma"]
+    assert [n for n, _, _ in entradas] == [1, 1, 2, 3, 3]
+    assert bloco == {0, 1, 2, 3, 4, 5}
+
+
+def test_anchor_printed_outline_ancora_por_similaridade():
+    linhas = [_linha(0, "Introdução", 20.0, 50),
+              _linha(0, "corpo do texto", 10.0, 120),
+              _linha(1, "Uma vida humana", 20.0, 50),
+              _linha(1, "corpo", 10.0, 120)]
+    entradas = [(1, "Introdução", 1), (2, "Uma vida humana", 6)]
+    anchors = anchor_printed_outline(linhas, entradas, 10.0)
+    assert anchors == [(0, 1, "Introdução"), (2, 2, "Uma vida humana")]
+
+
+def test_remove_cabecalho_com_espacos_extras_repetido():
+    """Cabecalho de rodape com padding de espacos ainda e um cabecalho."""
+    cabecalho = "Max Stirner" + " " * 80 + "O Único e sua Propriedade"
+    linhas = [_linha(p, cabecalho, 12.0, 780, h=800.0) for p in range(4)]
+    linhas += [_linha(p, "corpo", 10.0, 400, h=800.0) for p in range(4)]
+    out = remove_running_lines(linhas, keep=set(), remove_header=True,
+                               remove_page_numbers=True)
+    assert [l.text for l in out] == ["corpo"] * 4
+
+
+def test_linha_de_corpo_longa_nao_e_cabecalho():
+    """Linha longa (>= _MAX_RUNNING_LEN normalizada) nunca e cabecalho."""
+    corpo = ("palavra " * 20).strip()
+    linhas = [_linha(p, corpo, 10.0, 780, h=800.0) for p in range(4)]
+    out = remove_running_lines(linhas, keep=set(), remove_header=True,
+                               remove_page_numbers=True)
+    assert len(out) == 4
+
+
+def test_dividir_capitulos_longos_marca_continuacoes():
+    from backend.app.pdf_chapters import _dividir_capitulos_longos
+
+    capitulo = Chapter("Longo", 2,
+                       [Paragraph.from_text("palavra " * 100)
+                        for _ in range(6)])
+    partes = _dividir_capitulos_longos([capitulo], limite=200)
+    assert len(partes) == 3
+    assert [p.title for p in partes] == ["Longo", "Longo", "Longo"]
+    assert [p.continues for p in partes] == [False, True, True]
+
+
+def test_build_chapters_usa_indice_impresso_e_remove_a_pagina(tmp_path):
+    import pymupdf
+
+    p = tmp_path / "indice.pdf"
+    doc = pymupdf.open()
+    capa = doc.new_page()
+    capa.insert_text((200, 300), "Autor Desconhecido", fontsize=24,
+                     fontname="hebo")
+    indice = doc.new_page()
+    indice.insert_text((250, 80), "Índice", fontsize=14, fontname="hebo")
+    indice.insert_text((150, 120), "Introdução ... 1", fontsize=12)
+    indice.insert_text((150, 150), "Primeira Parte ... 5", fontsize=12)
+    for titulo in ("Introdução", "Primeira Parte"):
+        page = doc.new_page()
+        page.insert_text((120, 90), titulo, fontsize=20, fontname="hebo")
+        for k in range(20):
+            page.insert_text((72, 140 + k * 18),
+                             f"linha de corpo numero {k} do capitulo",
+                             fontsize=12)
+    doc.save(str(p))
+    doc.close()
+
+    chs, avisos = build_chapters(p)
+    titulos = [c.title for c in chs]
+    assert "Índice" not in titulos
+    assert "Autor Desconhecido" not in titulos
+    assert [c.title for c in chs] == ["Introdução", "Primeira Parte"]
+    assert any("Índice impresso" in a for a in avisos)
+
+
+# ---------------------------------------------------------------------------
+# Notas de rodape (endnotes)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_notes_agrupa_nota_multilinha():
+    linhas = [
+        _linha(0, "corpo do texto", 16.0, 200),
+        _linha(0, "4  começa a nota e segue", 10.0, 700),
+        _linha(0, "continuando na linha seguinte", 10.0, 712),
+        _linha(0, "e termina aqui.", 10.0, 724),
+        _linha(0, "mais corpo", 16.0, 300),
+    ]
+    notas, remover = extract_notes(linhas, 16.0, [(0, 1, "Cap")])
+    assert len(notas) == 1
+    numero, texto, indice = notas[0]
+    assert numero == 4
+    assert indice == 1
+    assert texto == ("começa a nota e segue continuando na linha seguinte "
+                     "e termina aqui.")
+    assert remover == {1, 2, 3}
+
+
+def test_extract_notes_ignora_linha_de_corpo_e_cabecalho():
+    linhas = [
+        _linha(0, "linha de corpo normal", 16.0, 700),
+        _linha(0, "Cabecalho corrente", 12.0, 720),
+    ]
+    notas, remover = extract_notes(linhas, 16.0, [(0, 1, "Cap")])
+    assert notas == []
+    assert remover == set()
+
+
+def _pdf_com_notas(tmp_path):
+    import pymupdf
+
+    p = tmp_path / "notas.pdf"
+    doc = pymupdf.open()
+    for titulo, nota in (("Capítulo Um", "Primeira nota do capítulo um."),
+                         ("Capítulo Dois", "Segunda nota do capítulo dois.")):
+        page = doc.new_page()
+        page.insert_text((120, 90), titulo, fontsize=20, fontname="hebo")
+        for k in range(6):
+            page.insert_text((72, 150 + k * 18),
+                             f"corpo do capitulo {k} com varias palavras aqui",
+                             fontsize=12)
+        page.insert_text((72, 720), f"1  {nota}", fontsize=8)
+    doc.save(str(p))
+    doc.close()
+    return p
+
+
+def test_build_chapters_associa_notas_ao_capitulo_e_remove_do_corpo(tmp_path):
+    p = _pdf_com_notas(tmp_path)
+    chs, _ = build_chapters(p)
+    assert [c.title for c in chs] == ["Capítulo Um", "Capítulo Dois"]
+    assert [n for n, _ in chs[0].notes] == [1]
+    assert [n for n, _ in chs[1].notes] == [1]
+    assert chs[0].notes[0][1] == "Primeira nota do capítulo um."
+    assert chs[1].notes[0][1] == "Segunda nota do capítulo dois."
+    corpo = " ".join(par.text for c in chs for par in c.paragraphs)
+    assert "Primeira nota" not in corpo
+    assert "Segunda nota" not in corpo
+
+
+def test_build_chapters_nota_multilinha_agrupada(tmp_path):
+    import pymupdf
+
+    p = tmp_path / "nota_longa.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((120, 90), "Capítulo", fontsize=20, fontname="hebo")
+    for k in range(6):
+        page.insert_text((72, 150 + k * 18), f"corpo numero {k}", fontsize=12)
+    page.insert_text((72, 700), "1  a nota comeca aqui e", fontsize=8)
+    page.insert_text((72, 714), "segue nesta segunda linha", fontsize=8)
+    page.insert_text((72, 728), "e fecha na terceira.", fontsize=8)
+    doc.save(str(p))
+    doc.close()
+
+    chs, _ = build_chapters(p)
+    assert len(chs) == 1
+    assert len(chs[0].notes) == 1
+    numero, texto = chs[0].notes[0]
+    assert numero == 1
+    assert texto == ("a nota comeca aqui e segue nesta segunda linha "
+                     "e fecha na terceira.")
+
+
+def test_extract_notes_aceita_numero_sozinho_e_pontuacao():
+    linhas = [
+        _linha(0, "corpo", 16.0, 200),
+        _linha(0, "7", 10.0, 700),
+        _linha(0, "texto que vem depois do numero sozinho", 10.0, 712),
+        _linha(0, "8) outra nota", 10.0, 724),
+        _linha(0, "9.mais uma nota colada", 10.0, 736),
+    ]
+    notas, remover = extract_notes(linhas, 16.0, [(0, 1, "Cap")])
+    por_numero = {n: t for n, t, _ in notas}
+    assert por_numero[7] == "texto que vem depois do numero sozinho"
+    assert por_numero[8] == "outra nota"
+    assert por_numero[9] == "mais uma nota colada"
+    assert remover == {1, 2, 3, 4}
+
+
+def test_extract_notes_nao_confunde_ano_de_quatro_digitos():
+    linhas = [_linha(0, "corpo", 16.0, 200),
+              _linha(0, "1844 foi um ano importante", 10.0, 700)]
+    notas, _ = extract_notes(linhas, 16.0, [(0, 1, "Cap")])
+    assert notas == []
+
+
+def test_dividir_capitulos_distribui_notas_por_chamador():
+    from backend.app.pdf_chapters import _dividir_capitulos_longos
+
+    def par(*refs):
+        runs = [Run("texto ")]
+        for ref in refs:
+            runs.append(Run(str(ref), superscript=True))
+        return Paragraph(runs=runs)
+
+    cap = Chapter("Longo", 2,
+                  [par(1), par(2), par(3), par(4)],
+                  notes=[(1, "n1"), (2, "n2"), (3, "n3"), (4, "n4"),
+                         (5, "orfa")])
+    partes = _dividir_capitulos_longos([cap], limite=4)
+    assert len(partes) == 2
+    assert [[n for n, _ in p.notes] for p in partes] == [[1, 2, 5], [3, 4]]
+    todas = [n for p in partes for n, _ in p.notes]
+    assert sorted(todas) == [1, 2, 3, 4, 5]  # nenhuma nota duplicada
+
+
+def test_nota_associa_ao_capitulo_do_chamador(monkeypatch):
+    """A nota pertence ao capitulo que chama, mesmo se a linha vier depois."""
+    from backend.app import pdf_chapters
+
+    linhas = [
+        _linha(0, "Capítulo Um", 24.0, 90),
+        _linha_sup(0, "a" * 80, 16.0, 150, 1),
+        _linha(0, "Capítulo Dois", 24.0, 300),
+        _linha_sup(0, "b" * 80, 16.0, 360, 2),
+        _linha(0, "1  nota do primeiro capitulo no rodape", 10.0, 700),
+    ]
+    monkeypatch.setattr(pdf_chapters, "extract_lines",
+                        lambda _p: (linhas, 1, []))
+    chs, _ = pdf_chapters.build_chapters("x.pdf")
+    um = [c for c in chs if c.title == "Capítulo Um"][0]
+    dois = [c for c in chs if c.title == "Capítulo Dois"][0]
+    assert [n for n, _ in um.notes] == [1]
+    assert dois.notes == []
+
+
+# ---------------------------------------------------------------------------
+# Chamador de nota na linha do TITULO (F1/F3)
+# ---------------------------------------------------------------------------
+
+
+def _linha_titulo_sup(page, texto, numero, y, *, size=24.0, h=800.0):
+    """Linha de titulo terminada por um run superscript numerico."""
+    return Line(page=page, text=f"{texto} {numero}", size=size, bold=True,
+                italic=False, bbox=(72.0, y, 500.0, y + size), page_height=h,
+                page_width=600.0,
+                runs=[Run(texto), Run(str(numero), superscript=True)])
+
+
+def test_assemble_coleta_title_refs_da_linha_da_ancora():
+    linhas = [
+        _linha_titulo_sup(0, "II. O Proprietário", 190, 90),
+        _linha(0, "corpo do capitulo", 16.0, 150),
+    ]
+    chs = assemble_chapters(linhas, [(0, 1, "II. O Proprietário")])
+    assert chs[0].title_refs == [190]
+
+
+def test_nota_chamada_no_titulo_deixa_de_ser_orfa(monkeypatch):
+    """O chamador na linha do titulo conta como referencia da nota."""
+    from backend.app import pdf_chapters
+
+    linhas = [
+        _linha_titulo_sup(0, "II. O Proprietário", 190, 90),
+        _linha(0, "a" * 80, 16.0, 150),
+        _linha(0, "190  nota chamada apenas no titulo", 10.0, 700),
+    ]
+    monkeypatch.setattr(pdf_chapters, "extract_lines",
+                        lambda _p: (linhas, 1, []))
+    chs, _ = pdf_chapters.build_chapters("x.pdf")
+    assert len(chs) == 1
+    assert chs[0].title_refs == [190]
+    assert [n for n, _ in chs[0].notes] == [190]
+    assert chs[0].notes[0][1] == "nota chamada apenas no titulo"
+
+
+def test_dividir_capitulos_preserva_title_refs_so_na_primeira_parte():
+    from backend.app.pdf_chapters import _dividir_capitulos_longos
+
+    cap = Chapter("Longo", 1,
+                  [Paragraph.from_text("palavra " * 100) for _ in range(6)],
+                  title_refs=[9], notes=[(9, "nota do titulo")])
+    partes = _dividir_capitulos_longos([cap], limite=200)
+    assert len(partes) == 3
+    assert partes[0].title_refs == [9]
+    assert all(p.title_refs == [] for p in partes[1:])
+    # a nota citada so no titulo fica com a primeira parte (que tem o heading)
+    assert [n for n, _ in partes[0].notes] == [9]
+
+
+def test_merge_empty_parents_soma_title_refs():
+    chs = [Chapter("II. Parte", 1, [], title_refs=[190]),
+           Chapter("O Proprietário", 2, [Paragraph.from_text("texto")],
+                   title_refs=[191])]
+    out = merge_empty_parents(chs)
+    assert len(out) == 1
+    assert out[0].title_refs == [190, 191]
+
+
+def test_agrupar_ate_soma_title_refs():
+    from backend.app.pdf_chapters import _agrupar_ate
+
+    chs = [Chapter("A", 1, [Paragraph.from_text("x")], title_refs=[1]),
+           Chapter("B", 1, [Paragraph.from_text("y")], title_refs=[2])]
+    out = _agrupar_ate(chs, limite=1)
+    assert len(out) == 1
+    assert out[0].title_refs == [1, 2]
