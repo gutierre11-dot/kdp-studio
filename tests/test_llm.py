@@ -4,6 +4,15 @@ import pytest
 from backend.app import config, llm
 
 
+@pytest.fixture
+def provedor_configurado(monkeypatch):
+    """`chat` exige um provider ativo; nao depender do `.env` do desenvolvedor."""
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "chave-de-teste")
+    llm.reset_model_cache()
+    return "deepseek"
+
+
 def test_provider_offline_sem_chaves(monkeypatch):
     for k in ("OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
               "LLM_PROVIDER"):
@@ -69,7 +78,7 @@ def test_translation_model_explicito_tem_prioridade(monkeypatch):
     assert llm.model_candidates() == ["meu-modelo"]
 
 
-def test_chat_faz_fallback_quando_modelo_falha(monkeypatch):
+def test_chat_faz_fallback_quando_modelo_falha(provedor_configurado, monkeypatch):
     chamados = []
 
     def fake_call(model, system, user, temperature):
@@ -85,7 +94,7 @@ def test_chat_faz_fallback_quando_modelo_falha(monkeypatch):
     assert chamados == ["gemini-flash-latest", "gemini-3.1-flash-lite"]
 
 
-def test_chat_esgota_tentativas_e_levanta_llmerror(monkeypatch):
+def test_chat_esgota_tentativas_e_levanta_llmerror(provedor_configurado, monkeypatch):
     def sempre_falha(*a, **k):
         raise llm.LLMError("503")
 
@@ -104,7 +113,7 @@ def test_chat_offline_levanta_erro_explicito(monkeypatch):
         llm.chat("s", "u")
 
 
-def test_modelo_resolvido_e_tentado_primeiro_depois(monkeypatch):
+def test_modelo_resolvido_e_tentado_primeiro_depois(provedor_configurado, monkeypatch):
     """Depois do primeiro sucesso, nao se paga de novo o custo dos 503."""
     chamados = []
 

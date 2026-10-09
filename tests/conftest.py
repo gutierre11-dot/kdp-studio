@@ -25,6 +25,30 @@ def offline(monkeypatch):
     yield
 
 
+# Chaves de IA que, se presentes no ambiente do desenvolvedor, mudariam o
+# provider ativo e o resultado dos testes.
+_ENV_IA = ("LLM_PROVIDER", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
+           "GEMINI_API_KEY", "TRANSLATION_MODEL")
+
+
+@pytest.fixture(autouse=True)
+def ambiente_sem_ia(monkeypatch):
+    """Neutraliza o `.env` real: a suite nao pode depender de segredos locais.
+
+    Sem isto, a mesma revisao passa numa maquina sem chave e falha em outra
+    configurada. Testes que precisam de um provider ligam a chave que querem.
+    """
+    from backend.app import config, llm
+
+    for k in _ENV_IA:
+        monkeypatch.delenv(k, raising=False)
+    config.get_settings.cache_clear()
+    llm.reset_model_cache()
+    yield
+    config.get_settings.cache_clear()
+    llm.reset_model_cache()
+
+
 def _wrap(text: str, width: int) -> list[str]:
     """Quebra o texto em linhas de ate `width` chars, sempre em fim de palavra.
 

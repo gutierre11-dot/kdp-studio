@@ -35,13 +35,27 @@ def test_health(client):
 
 
 def test_config_endpoint(client):
+    # A fixture autouse `ambiente_sem_ia` remove as chaves do .env real, entao
+    # aqui o esperado e offline.
     corpo = client.get("/api/config").json()
-    assert corpo["provider"] in ("openai", "gemini", "offline")
-    assert isinstance(corpo["fallback_models"], list)
+    assert corpo["provider"] == "offline"
+    assert corpo["configured"] is False
+    assert corpo["translation_model"] == ""
+    assert corpo["fallback_models"] == []
     assert corpo["max_upload_mb"] > 0
     assert corpo["chunk_chars"] > 0
     assert corpo["workers"] > 0
     assert isinstance(corpo["languages"], dict)
+
+
+def test_config_endpoint_reconhece_deepseek(client, monkeypatch):
+    """DeepSeek e o provider recomendado e deve ser reportado como ativo."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "chave-de-teste")
+    corpo = client.get("/api/config").json()
+    assert corpo["provider"] == "deepseek"
+    assert corpo["configured"] is True
+    assert corpo["translation_model"] == "deepseek-flash"
+    assert corpo["fallback_models"] == ["deepseek-v4-pro"]
 
 
 def test_criar_job_e_acompanhar(client, pdf_bytes):
