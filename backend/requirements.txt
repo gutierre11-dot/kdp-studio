@@ -1,6 +1,6 @@
 # KDP Studio — dependências de runtime (versões fixadas p/ reprodutibilidade).
 # Instale com: python3 -m pip install -r requirements.txt
-fastapi==0.142.2
+fastapi==0.162.5
 uvicorn==0.54.0
 pymupdf==1.28.2
 ebooklib==0.18
