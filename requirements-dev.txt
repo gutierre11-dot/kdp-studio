@@ -1,5 +1,5 @@
 # Dependências de desenvolvimento/teste.
 # Instale com: python3 -m pip install -r requirements-dev.txt
 -r backend/requirements.txt
-pytest==9.1.1
+pytest==9.2.0
 ruff==0.17.0
