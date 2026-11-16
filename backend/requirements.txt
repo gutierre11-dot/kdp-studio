@@ -6,7 +6,7 @@ pymupdf==1.28.2
 ebooklib==0.18
 python-multipart==0.0.32
 python-dotenv==1.2.4
-openai==3.24.0
+openai==3.51.0
 httpx==0.28.1
 pydantic==2.13.5
 lxml==6.1.3
