@@ -7,6 +7,7 @@
     "dev": "bash run.sh",
     "start": "RELOAD=0 bash run.sh",
     "test": "python3 -m pytest -q",
-    "check": "python3 -m py_compile backend/app/*.py && node --check static/app.js"
+    "lint": "python3 -m ruff check .",
+    "check": "python3 -m ruff check . && python3 -m py_compile backend/app/*.py && node --check static/app.js"
   }
 }

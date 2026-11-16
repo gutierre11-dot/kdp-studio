@@ -78,6 +78,7 @@ class Settings:
 
     output_dir: Path
     max_upload_bytes: int
+    max_cover_bytes: int
     job_ttl_seconds: int
     job_max: int
     job_workers: int
@@ -103,6 +104,7 @@ def get_settings() -> Settings:
     return Settings(
         output_dir=BASE_DIR / "output",
         max_upload_bytes=_int("MAX_UPLOAD_MB", 100) * 1024 * 1024,
+        max_cover_bytes=_int("MAX_COVER_MB", 10) * 1024 * 1024,
         job_ttl_seconds=_int("JOB_TTL_SECONDS", 2 * 60 * 60),
         job_max=_int("JOB_MAX", 50),
         job_workers=_int("JOB_WORKERS", 2),

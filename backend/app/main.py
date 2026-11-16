@@ -5,7 +5,8 @@ Fluxo de um job:
                             `job_id`; se houver traducao, ela roda em
                             background com progresso real.
   GET  /api/jobs/{id}       status/progresso + metadados dos capitulos.
-  GET  /api/jobs/{id}/chapters/{i}   texto completo de um capitulo.
+  GET  /api/jobs/{id}/chapters/{i}   texto completo de um capitulo (e notas).
+  GET|POST|DELETE /api/jobs/{id}/cover  capa efetiva, upload e remocao.
   POST /api/jobs/{id}/export         gera o EPUB (aplicando edicoes).
   POST /api/jobs/{id}/cancel         cancela a traducao em andamento.
   DELETE /api/jobs/{id}              descarta o job e seus artefatos.
@@ -25,14 +26,14 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import kdp_epub, pdf_chapters, translate
+from . import cover, kdp_epub, pdf_chapters, translate
 from .config import get_settings
 from .jobs import JobStore
 from .llm import is_configured, model_candidates, provider_name
-from .models import Chapter, JobState, Paragraph
+from .models import Chapter, JobState, paragrafo_de_texto, texto_editavel
 from .translate import DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG, LANG_NAMES
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,12 @@ SEM_TEXTO = ("PDF sem texto extraível: não há o que converter "
 
 settings = get_settings()
 store = JobStore(settings)
+
+CHAVE_IA = ("Nenhuma chave de IA configurada para traduzir (defina "
+            "DEEPSEEK_API_KEY, OPENAI_API_KEY ou GEMINI_API_KEY — ou rode "
+            "./configurar-ia.sh).")
+MAX_DESCRICAO = 4000   # `dc:description` do OPF, folga para uma sinopse real
+MAX_EDITORA = 200      # `dc:publisher` do OPF
 
 app = FastAPI(title="KDP Studio API")
 app.add_middleware(
@@ -79,8 +86,8 @@ def _texto(valor: Any, default: str = "") -> str:
     return str(valor)
 
 
-async def _ler_upload(arquivo: UploadFile) -> bytes:
-    """Le o upload em blocos, respeitando MAX_UPLOAD_MB."""
+async def _ler_upload(arquivo: UploadFile, limite: int) -> bytes:
+    """Le o upload em blocos, interrompendo ao passar de `limite` bytes."""
     pedacos: list[bytes] = []
     total = 0
     while True:
@@ -88,13 +95,21 @@ async def _ler_upload(arquivo: UploadFile) -> bytes:
         if not pedaco:
             break
         total += len(pedaco)
-        if total > settings.max_upload_bytes:
-            limite = settings.max_upload_bytes // (1024 * 1024)
-            raise HTTPException(413, f"arquivo maior que o limite de {limite} MB")
+        if total > limite:
+            raise HTTPException(
+                413, f"arquivo maior que o limite de {limite // (1024 * 1024)} MB")
         pedacos.append(pedaco)
     if not total:
         raise HTTPException(400, "arquivo vazio")
     return b"".join(pedacos)
+
+
+def _capa_de(job: JobState) -> dict:
+    """Estado da capa: enviada pelo usuario ou procedural a partir do titulo."""
+    if job.cover_image:
+        return {"kind": "upload", "name": job.cover_name or "capa",
+                "bytes": len(job.cover_image)}
+    return {"kind": "procedural", "name": None, "bytes": 0}
 
 
 def _tem_texto(capitulos: list[Chapter]) -> bool:
@@ -136,7 +151,10 @@ def _selecionar_capitulos(job: JobState, selecao: Any, edicoes: Any) -> list[Cha
         paragrafos = capitulo.paragraphs
         bruto = edicoes.get(str(indice))
         if isinstance(bruto, list):
-            paragrafos = [Paragraph.from_text(str(p)) for p in bruto]
+            # `paragrafo_de_texto` devolve os `⟦N⟧` a run superscript: e assim
+            # que o chamador de nota sobrevive a edicao do texto e continua
+            # linkando a endnote em vez de virar um digito solto.
+            paragrafos = [paragrafo_de_texto(str(p)) for p in bruto]
         saida.append(Chapter(titulo or capitulo.title, capitulo.level, paragrafos,
                              continues=capitulo.continues,
                              notes=list(capitulo.notes),
@@ -187,6 +205,7 @@ def configuracao() -> dict:
         "translation_model": candidatos[0] if candidatos else "",
         "fallback_models": candidatos[1:],
         "max_upload_mb": settings.max_upload_bytes // (1024 * 1024),
+        "max_cover_mb": settings.max_cover_bytes // (1024 * 1024),
         "chunk_chars": settings.translation_chunk_chars,
         "workers": settings.translation_workers,
         "languages": dict(LANG_NAMES),
@@ -205,15 +224,25 @@ async def criar_job(
     translation_model: Any = Form(default=None),
     remove_header: Any = Form(default=None),
     remove_page_numbers: Any = Form(default=None),
+    description: Any = Form(default=None),
+    publisher: Any = Form(default=None),
 ) -> dict:
-    dados = await _ler_upload(file)
+    dados = await _ler_upload(file, settings.max_upload_bytes)
     if not dados.lstrip()[:4].startswith(PDF_MAGIC):
         raise HTTPException(400, "o arquivo enviado não é um PDF válido")
 
+    descreve = _texto(description).strip()
+    if len(descreve) > MAX_DESCRICAO:
+        raise HTTPException(
+            400, f"descrição muito longa (máximo de {MAX_DESCRICAO} caracteres)")
+    editora = _texto(publisher).strip()
+    if len(editora) > MAX_EDITORA:
+        raise HTTPException(
+            400, f"editora muito longa (máximo de {MAX_EDITORA} caracteres)")
+
     traduzir = _as_bool(translate_, default=False)
     if traduzir and not is_configured():
-        raise HTTPException(400, "Nenhuma chave de IA configurada para traduzir "
-                                 "(defina OPENAI_API_KEY ou GEMINI_API_KEY).")
+        raise HTTPException(400, CHAVE_IA)
 
     origem = _texto(source_lang, DEFAULT_SOURCE_LANG)
     destino = _texto(target_lang, DEFAULT_TARGET_LANG)
@@ -251,7 +280,7 @@ async def criar_job(
         idioma = translate.detect_language(amostra)
     job = store.create(title=_texto(title, "Livro"), author=_texto(author, "Autor"),
                        language=idioma, source_name=file.filename or "documento.pdf",
-                       translated=traduzir)
+                       translated=traduzir, description=descreve, publisher=editora)
     store.update(job.id, chapters=capitulos, warnings=list(avisos))
 
     if traduzir:
@@ -279,6 +308,9 @@ def obter_job(job_id: str) -> dict:
         "author": job.author,
         "language": job.language,
         "translated": job.translated,
+        "description": job.description,
+        "publisher": job.publisher,
+        "cover": _capa_de(job),
         "warnings": list(job.warnings),
         "error": job.error,
         "source_name": job.source_name,
@@ -295,7 +327,62 @@ def obter_capitulo(job_id: str, index: int) -> dict:
         raise HTTPException(404, f"o capítulo {index} não existe neste job")
     capitulo = job.chapters[index]
     return {"index": index, "title": capitulo.title, "level": capitulo.level,
-            "paragraphs": [p.text for p in capitulo.paragraphs]}
+            # Texto plano com os chamadores de nota como `⟦N⟧`: e o mesmo texto
+            # que a edicao devolve na exportacao, entao o link da nota nao se
+            # perde no caminho.
+            "paragraphs": [texto_editavel(p) for p in capitulo.paragraphs],
+            # Notas sao endnotes: precisam chegar a revisao, senao o usuario so
+            # descobre se a associacao saiu certa abrindo o EPUB ja exportado.
+            "notes": [[numero, texto] for numero, texto in capitulo.notes],
+            "title_refs": list(capitulo.title_refs)}
+
+
+@app.get("/api/jobs/{job_id}/cover")
+def capa_atual(job_id: str) -> Response:
+    """Imagem efetiva do job: a enviada pelo usuario, ou a procedural."""
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(404, f"job {job_id} não encontrado")
+    if job.cover_image:
+        extensao = ""
+        if "." in (job.cover_name or ""):
+            extensao = job.cover_name.rsplit(".", 1)[1].lower()
+        media = "image/png" if extensao == "png" else "image/jpeg"
+        return Response(content=job.cover_image, media_type=media)
+    return Response(content=cover.build_cover_bytes(job.title, job.author),
+                    media_type="image/jpeg")
+
+
+@app.post("/api/jobs/{job_id}/cover")
+async def enviar_capa(job_id: str, file: UploadFile = File(...)) -> dict:
+    """Sobe a capa do autor (JPEG/PNG), substituindo a anterior, se houver."""
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(404, f"job {job_id} não encontrado")
+    dados = await _ler_upload(file, settings.max_cover_bytes)
+    try:
+        # A extensao enviada nao decide nada: so os magic bytes e a
+        # decodificacao real dizem se e uma imagem aproveitavel.
+        extensao = cover.detectar_capa(dados)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # O nome fica so para exibicao, mas precisa carregar a extensao real: e
+    # dela que `capa_atual` deriva o Content-Type da previa.
+    nome = (file.filename or "").strip() or "capa"
+    if not nome.lower().endswith((".jpg", ".jpeg", ".png")):
+        nome = f"{nome}.{extensao}"
+    store.update(job_id, cover_image=dados, cover_name=nome[:120])
+    return {"ok": True, "cover": _capa_de(job)}
+
+
+@app.delete("/api/jobs/{job_id}/cover")
+def remover_capa(job_id: str) -> dict:
+    """Descarta a capa enviada e volta para a capa procedural."""
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(404, f"job {job_id} não encontrado")
+    store.update(job_id, cover_image=None, cover_name=None)
+    return {"ok": True, "cover": _capa_de(job)}
 
 
 @app.post("/api/jobs/{job_id}/export")
@@ -321,8 +408,14 @@ async def exportar_job(job_id: str, request: Request) -> FileResponse:
     if not capitulos:
         raise HTTPException(400, "nenhum capítulo selecionado para exportar")
 
+    inclui_capa = _as_bool(corpo.get("cover"), default=True)
     destino = store.out_path_for(job, "epub")
-    kdp_epub.build_epub(capitulos, job.title, job.author, job.language, destino)
+    kdp_epub.build_epub(capitulos, job.title, job.author, job.language, destino,
+                        cover=inclui_capa,
+                        # A capa enviada ganha prioridade sobre a procedural.
+                        cover_image=job.cover_image if inclui_capa else None,
+                        description=job.description or None,
+                        publisher=job.publisher or None)
     job.output_paths.append(destino)
     return FileResponse(str(destino), filename=destino.name,
                         media_type="application/epub+zip")

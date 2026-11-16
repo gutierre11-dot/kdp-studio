@@ -146,8 +146,10 @@ _FRONT_MATTER_RE = re.compile(
 _TITULO_NUMERADO_RE = re.compile(r"^[\dIVXLCDM]+\b")
 # Pontuacao de fim de frase seguida de mais texto ("capitulo. O texto...").
 _FIM_DE_FRASE_RE = re.compile(r"[.!?]\s+\S")
-# Separadores que podem vir depois da palavra-chave ("Parte - A Queda").
-_SEPARADOR_RE = re.compile(r"^[:;—–-]+")
+# Separadores que podem vir depois da palavra-chave ("Parte - A Queda",
+# "Parte — A Queda"). O travessao e o meia-risca entram de proposito: livros
+# usam os tres como separador de titulo.
+_SEPARADOR_RE = re.compile(r"^[:;—–-]+")  # noqa: RUF001
 # Linha do sumario do proprio PDF: "1. Os antigos … 13". Os lideres de pontos
 # seguidos da pagina denunciam a entrada, que nao e um titulo do corpo.
 _TOC_LINE_RE = re.compile(r"(?:\.{2,}|…)\s*[\divxlcdmIVXLCDM]*\s*$")
@@ -199,7 +201,8 @@ def _sem_numero_de_pagina(texto: str) -> str:
     if not achado:
         return texto
     prefixo = texto[:achado.start()].rstrip()
-    sem_marcador = _MARCADOR_INICIO_RE.sub("", prefixo, count=1).strip(" .:;-–—")
+    sem_marcador = _MARCADOR_INICIO_RE.sub("", prefixo, count=1).strip(
+        " .:;-–—")  # noqa: RUF001 - os tres travessoes sao separadores reais
     if re.search(r"[^\W\d_]{2,}", sem_marcador):
         return prefixo
     return texto
@@ -250,9 +253,8 @@ def _casa_titulo(padrao: re.Pattern[str], texto: str,
     resto = texto[achado.end():].strip()
     if _parece_inicio_de_frase(resto):
         return False
-    if exigir_continuacao_titulo and not _continuacao_e_titulo(resto):
-        return False
-    return True
+    # A continuacao de titulo so vale quando o chamador exige o marcador.
+    return not (exigir_continuacao_titulo and not _continuacao_e_titulo(resto))
 
 
 def _bold_dominante(linha: Line) -> bool:
@@ -325,9 +327,7 @@ def detect_headings(lines: list[Line], body_size: float) -> list[Anchor]:
         elif numerado:
             nivel = _nivel_numerado(texto)
         elif negrito_pequeno:
-            if _casa_titulo(_CHAPTER_START_RE, texto):
-                nivel = 1
-            elif _TITULO_ROMANO_RE.match(texto):
+            if _casa_titulo(_CHAPTER_START_RE, texto) or _TITULO_ROMANO_RE.match(texto):
                 nivel = 1
             elif _NUMBERED_RE.match(texto):
                 nivel = _nivel_numerado(texto)
@@ -572,7 +572,9 @@ def remove_running_lines(lines: list[Line], keep: set[int], *,
     """
     manter = cleaning_mask(lines, keep, remove_header=remove_header,
                            remove_page_numbers=remove_page_numbers)
-    return [linha for linha, fica in zip(lines, manter) if fica]
+    # `strict=True`: `cleaning_mask` devolve uma entrada por linha de `lines`.
+    # Se isso deixar de valer, quero o erro aqui e nao um livro truncado.
+    return [linha for linha, fica in zip(lines, manter, strict=True) if fica]
 
 
 def _largura(linha: Line) -> float:
@@ -1012,7 +1014,7 @@ def build_chapters(pdf_path, *, remove_header: bool = True,
     for i in toc_lines:
         if i not in keep:
             manter[i] = False
-    limpas = [linha for linha, fica in zip(lines, manter) if fica]
+    limpas = [linha for linha, fica in zip(lines, manter, strict=True) if fica]
 
     novo_indice: dict[int, int] = {}
     for antigo, fica in enumerate(manter):

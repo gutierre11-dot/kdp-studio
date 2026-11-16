@@ -7,14 +7,15 @@ artefatos junto com o estado.
 """
 from __future__ import annotations
 
+import contextlib
 import re
 import threading
 import time
 import unicodedata
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable
 
 from .config import Settings
 from .models import ChapterView, JobState
@@ -41,10 +42,12 @@ class JobStore:
 
     # -- ciclo de vida -----------------------------------------------------
     def create(self, *, title: str, author: str, language: str,
-               source_name: str, translated: bool) -> JobState:
+               source_name: str, translated: bool, description: str = "",
+               publisher: str = "") -> JobState:
         job = JobState.new(uuid.uuid4().hex[:12], title=title, author=author,
                            language=language, source_name=source_name,
-                           translated=translated)
+                           translated=translated, description=description,
+                           publisher=publisher)
         with self._lock:
             self._jobs[job.id] = job
         return job
@@ -97,10 +100,8 @@ class JobStore:
         """Marca o job como cancelado e apaga os arquivos que ele gerou."""
         job.cancel.set()
         for caminho in job.output_paths:
-            try:
+            with contextlib.suppress(OSError):
                 Path(caminho).unlink(missing_ok=True)
-            except OSError:
-                pass
 
     def prune(self) -> None:
         """Remove jobs expirados e limita o total em memoria.
@@ -120,7 +121,7 @@ class JobStore:
             if excesso > 0:
                 mais_antigos = sorted(self._jobs.items(),
                                       key=lambda kv: kv[1].created_at)
-                for jid, job in mais_antigos[:excesso]:
+                for jid, _ in mais_antigos[:excesso]:
                     removidos.append(self._jobs.pop(jid))
         for job in removidos:
             self._cleanup(job)
@@ -135,7 +136,7 @@ class JobStore:
             previa = capitulo.paragraphs[0].text[:200] if capitulo.paragraphs else ""
             vistas.append(ChapterView(index=i, title=capitulo.title,
                                       level=capitulo.level, words=capitulo.words,
-                                      preview=previa))
+                                      preview=previa, notes_count=len(capitulo.notes)))
         return vistas
 
     def out_path_for(self, job: JobState, fmt: str) -> Path:

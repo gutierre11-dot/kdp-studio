@@ -96,7 +96,7 @@ def test_validate_epub_rejeita_zip_inconsistente(tmp_path):
         zf.writestr("META-INF/container.xml", "<container/>")
         zf.writestr("EPUB/content.opf", "<package><manifest>"
                     '<item href="cap1.xhtml"/></manifest></package>')
-    with pytest.raises(EpubValidationError, match="cap1.xhtml"):
+    with pytest.raises(EpubValidationError, match=r"cap1\.xhtml"):
         validate_epub(ruim)
 
 
@@ -350,13 +350,9 @@ def test_capa_externa_png_por_bytes(tmp_path):
     validate_epub(out)
 
 
-def test_capa_externa_jpeg_por_caminho(tmp_path):
-    import base64
-
-    capa = base64.b64decode(_JPEG_1PX)
-    assert capa[:3] == b"\xff\xd8\xff"
+def test_capa_externa_jpeg_por_caminho(tmp_path, capa_jpg):
     arquivo = tmp_path / "minha-capa.jpeg"
-    arquivo.write_bytes(capa)
+    arquivo.write_bytes(capa_jpg)
     out = build_epub(_caps(), "T", "A", "pt-BR", tmp_path / "l.epub",
                      cover_image=arquivo)
     with zipfile.ZipFile(out) as zf:
@@ -370,9 +366,63 @@ def test_capa_externa_jpeg_por_caminho(tmp_path):
     validate_epub(out)
 
 
+def test_capa_jpeg_ilegivel_e_recusada(tmp_path):
+    """JPEG com assinatura valida que o decodificador recusa nao vira capa.
+
+    `_JPEG_1PX` foi montado a mao e o libjpeg o rejeita: e exatamente o caso
+    que a validacao existe para barrar, porque um arquivo assim sairia como
+    pagina em branco no leitor.
+    """
+    import base64
+
+    capa = base64.b64decode(_JPEG_1PX)
+    assert capa[:3] == b"\xff\xd8\xff"
+    with pytest.raises(ValueError):
+        build_epub(_caps(), "T", "A", "pt-BR", tmp_path / "l.epub",
+                   cover_image=capa)
+
+
 def test_capa_externa_none_mantem_capa_procedural(tmp_path):
     out = build_epub(_caps(), "T", "A", "pt-BR", tmp_path / "l.epub",
                      cover=True, cover_image=None)
     with zipfile.ZipFile(out) as zf:
         nomes = set(zf.namelist())
     assert "EPUB/cover.jpg" in nomes
+
+
+def test_capa_invalida_nao_gera_epub(tmp_path):
+    """PDF renomeado para .jpg nao pode virar capa de um EPUB publicavel."""
+    destino = tmp_path / "l.epub"
+    with pytest.raises(ValueError):
+        build_epub(_caps(), "T", "A", "pt-BR", destino,
+                   cover_image=b"%PDF-1.4 nao sou imagem")
+    assert not destino.exists()
+
+
+def test_descricao_e_editora_viram_dublin_core(tmp_path):
+    out = build_epub(_caps(), "Título", "Autora", "pt-BR", tmp_path / "l.epub",
+                     description="Sinopse do livro.", publisher="Editora X")
+    with zipfile.ZipFile(out) as zf:
+        opf = zf.read("EPUB/content.opf").decode()
+    assert "<dc:description>Sinopse do livro.</dc:description>" in opf
+    assert "<dc:publisher>Editora X</dc:publisher>" in opf
+    validate_epub(out)
+
+
+def test_metadados_ausentes_nao_viram_tag_vazia(tmp_path):
+    out = build_epub(_caps(), "T", "A", "pt-BR", tmp_path / "l.epub")
+    with zipfile.ZipFile(out) as zf:
+        opf = zf.read("EPUB/content.opf").decode()
+    assert "dc:description" not in opf
+    assert "dc:publisher" not in opf
+
+
+def test_descricao_com_caractere_invalido_e_saneada(tmp_path):
+    """O XML 1.0 nao aceita \\x00: sem saneamento o OPF inteiro quebra."""
+    out = build_epub(_caps(), "T", "A", "pt-BR", tmp_path / "l.epub",
+                     description="antes\x00depois", publisher="E\x07ditora")
+    with zipfile.ZipFile(out) as zf:
+        opf = zf.read("EPUB/content.opf").decode()
+    assert "antesdepois" in opf
+    assert "Editora" in opf
+    validate_epub(out)

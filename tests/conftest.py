@@ -146,6 +146,64 @@ def pdf_bytes(make_pdf):
 
 
 @pytest.fixture
+def pdf_com_nota_bytes(tmp_path):
+    """PDF de uma página com chamador sobrescrito no corpo e nota no pé.
+
+    `insert_htmlbox` é usado de propósito: só ele emite o span de `<sup>1</sup>`
+    com a flag de superscript de que a extração deriva o chamador de nota.
+    """
+    import pymupdf
+
+    largura, altura = 595, 842
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=largura, height=altura)
+        page.insert_text((72, 90), "Capítulo Um", fontsize=20, fontname="hebo")
+        page.insert_htmlbox(
+            pymupdf.Rect(72, 150, largura - 72, altura * 0.7),
+            "<p>Corpo com chamador<sup>1</sup> aqui.</p>",
+            css="p { font-size: 16px; }")
+        page.insert_text((72, altura * 0.85), "1 Nota de teste.",
+                         fontsize=10, fontname="helv")
+        doc.set_toc([[1, "Capítulo Um", 1]])
+        caminho = tmp_path / "com-nota.pdf"
+        doc.save(str(caminho))
+    finally:
+        doc.close()
+    return caminho.read_bytes()
+
+
+@pytest.fixture
+def capa_png():
+    """PNG pequeno e real, para os testes de upload de capa."""
+    import pymupdf
+
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=100, height=160)
+        page.draw_rect(pymupdf.Rect(0, 0, 100, 160), color=None,
+                       fill=(0.2, 0.3, 0.5))
+        return page.get_pixmap(matrix=pymupdf.Matrix(1, 1)).tobytes("png")
+    finally:
+        doc.close()
+
+
+@pytest.fixture
+def capa_jpg():
+    """JPEG pequeno e real, para os testes de upload de capa."""
+    import pymupdf
+
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=100, height=160)
+        page.draw_rect(pymupdf.Rect(0, 0, 100, 160), color=None,
+                       fill=(0.5, 0.2, 0.2))
+        return page.get_pixmap(matrix=pymupdf.Matrix(1, 1)).tobytes("jpeg")
+    finally:
+        doc.close()
+
+
+@pytest.fixture
 def make_bookmark_pdf(tmp_path):
     """PDF de 2 páginas cujos títulos têm bookmarks correspondentes."""
     import pymupdf

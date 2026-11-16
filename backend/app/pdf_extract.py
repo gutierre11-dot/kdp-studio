@@ -72,5 +72,5 @@ def extract_lines(pdf_path: Path | str) -> tuple[list[Line], int, list[list]]:
         outline = [list(t) for t in doc.get_toc(simple=True)]
     finally:
         doc.close()
-    linhas.sort(key=lambda l: (l.page, l.bbox[1], l.bbox[0]))
+    linhas.sort(key=lambda linha: (linha.page, linha.bbox[1], linha.bbox[0]))
     return linhas, paginas, outline

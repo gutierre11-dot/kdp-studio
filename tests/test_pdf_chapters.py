@@ -249,7 +249,7 @@ def test_remove_cabecalho_repetido_por_banda():
     linhas += [_linha(p, "corpo", 10.0, 400, h=800.0) for p in range(4)]
     out = remove_running_lines(linhas, keep=set(), remove_header=True,
                                remove_page_numbers=True)
-    assert [l.text for l in out] == ["corpo"] * 4
+    assert [linha.text for linha in out] == ["corpo"] * 4
 
 
 def test_ancora_nunca_e_removida():
@@ -479,7 +479,7 @@ def test_remove_cabecalho_com_espacos_extras_repetido():
     linhas += [_linha(p, "corpo", 10.0, 400, h=800.0) for p in range(4)]
     out = remove_running_lines(linhas, keep=set(), remove_header=True,
                                remove_page_numbers=True)
-    assert [l.text for l in out] == ["corpo"] * 4
+    assert [linha.text for linha in out] == ["corpo"] * 4
 
 
 def test_linha_de_corpo_longa_nao_e_cabecalho():
@@ -679,8 +679,8 @@ def test_nota_associa_ao_capitulo_do_chamador(monkeypatch):
     monkeypatch.setattr(pdf_chapters, "extract_lines",
                         lambda _p: (linhas, 1, []))
     chs, _ = pdf_chapters.build_chapters("x.pdf")
-    um = [c for c in chs if c.title == "Capítulo Um"][0]
-    dois = [c for c in chs if c.title == "Capítulo Dois"][0]
+    um = next(c for c in chs if c.title == "Capítulo Um")
+    dois = next(c for c in chs if c.title == "Capítulo Dois")
     assert [n for n, _ in um.notes] == [1]
     assert dois.notes == []
 

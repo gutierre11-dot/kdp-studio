@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Um push novo no mesmo branch cancela a execucao anterior: sem isso, uma fila
+# de pushes deixa runners ocupados validando codigo que ja foi substituido.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # O minimo declarado em pyproject.toml e o runtime de desenvolvimento.
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Testes
+        # `-o addopts=""` para o resumo aparecer no log do CI: o addopts do
+        # pyproject e `-q`, que esconde a contagem por arquivo.
+        run: python -m pytest -o addopts="" -q
+
+      - name: Sintaxe do frontend
+        run: node --check static/app.js

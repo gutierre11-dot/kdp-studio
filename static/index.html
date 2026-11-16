@@ -81,7 +81,7 @@ tailwind.config = {
         <p class="font-semibold">Arraste seu PDF aqui</p>
         <p class="text-sm text-slate-400">ou <span class="text-violet-300 underline font-semibold">clique para selecionar</span></p>
         <p id="file-name" class="text-xs text-amber-300 mt-2 font-medium"></p>
-        <p class="text-[11px] text-slate-500 mt-1">Processamento 100% local · o PDF não sai da sua máquina</p>
+        <p class="text-[11px] text-slate-500 mt-1">A conversão roda no seu computador · o PDF só sai daqui se você ativar a tradução</p>
       </div>
 
       <div class="grid sm:grid-cols-2 gap-3 mt-4">
@@ -94,6 +94,21 @@ tailwind.config = {
           <input id="inp-author" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Ex.: Maria Silva">
         </div>
       </div>
+
+      <details class="mt-3 glass rounded-2xl px-4 py-3">
+        <summary class="text-sm font-semibold cursor-pointer select-none">🏷 Metadados da loja <span class="text-slate-400 font-normal">(opcional)</span></summary>
+        <p class="text-[11px] text-slate-400 mt-2">Descrição e editora entram no EPUB e aparecem na ficha do livro na Amazon.</p>
+        <div class="mt-3 space-y-3">
+          <div>
+            <label class="text-xs font-semibold text-slate-300" for="inp-description">Descrição / sinopse</label>
+            <textarea id="inp-description" rows="3" maxlength="4000" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Uma sinopse curta que desperte a vontade de ler."></textarea>
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-300" for="inp-publisher">Editora</label>
+            <input id="inp-publisher" maxlength="200" class="field w-full mt-1 px-3 py-2.5 text-sm" placeholder="Ex.: Publicação Independente">
+          </div>
+        </div>
+      </details>
 
       <div class="mt-4 space-y-3">
         <label class="flex items-center justify-between gap-3 glass rounded-2xl px-4 py-3 cursor-pointer" title="Remove títulos repetidos no topo das páginas">
@@ -142,6 +157,10 @@ tailwind.config = {
         </div>
       </div>
 
+      <p id="tr-privacy" class="hidden mt-3 rounded-xl px-3 py-2 text-[11px] leading-relaxed text-amber-200/90 bg-amber-500/10 border border-amber-400/25">
+        🔐 Com a tradução ativada, o texto do livro é enviado à API do provedor de IA configurado no servidor (DeepSeek, OpenAI ou Gemini). Sem o toggle, o livro não sai deste computador.
+      </p>
+
       <button id="btn-start" class="w-full mt-5 py-3.5 rounded-2xl font-extrabold text-white shadow-xl transition hover:scale-[1.01] active:scale-[.99] disabled:opacity-50" style="background:linear-gradient(135deg,#6366f1,#a855f7 55%,#ec4899)">⚡ Converter para EPUB</button>
     </section>
 
@@ -164,20 +183,51 @@ tailwind.config = {
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 class="font-bold text-lg">Revise e exporte</h2>
-          <p class="text-sm text-slate-400">Renomeie, reordene ou desligue capítulos antes de gerar o EPUB.</p>
+          <p class="text-sm text-slate-400">Revise os capítulos, corrija o texto, escolha a capa e exporte.</p>
         </div>
         <button id="btn-export" class="px-5 py-2.5 rounded-xl text-sm font-extrabold text-white shadow-lg transition hover:scale-[1.02] disabled:opacity-50" style="background:linear-gradient(135deg,#10b981,#0ea5e9)">⬇ Exportar EPUB</button>
       </div>
 
       <div id="warn-box" class="hidden mt-4 rounded-2xl p-4 bg-amber-500/10 border border-amber-400/30 text-sm text-amber-100"></div>
 
+      <div id="cover-card" class="mt-4 glass rounded-2xl p-4">
+        <div class="flex flex-wrap items-center gap-4">
+          <img id="cover-thumb" alt="Prévia da capa" class="w-14 h-[88px] object-cover rounded-lg border border-white/15 bg-white/5">
+          <div class="flex-1 min-w-[220px]">
+            <p id="cover-status" class="text-sm font-semibold">Capa gerada automaticamente</p>
+            <p id="cover-hint" class="text-[11px] text-slate-400">Título e autor sobre um fundo sóbrio, em 1600×2560 (proporção KDP 1:1.6).</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <input id="cover-input" type="file" accept="image/jpeg,image/png" class="hidden">
+            <button id="btn-cover-upload" class="px-3 py-2 rounded-xl text-xs font-bold glass hover:bg-white/10 transition">🖼 Enviar minha capa</button>
+            <button id="btn-cover-reset" class="hidden px-3 py-2 rounded-xl text-xs font-bold glass hover:bg-white/10 transition">↺ Usar capa gerada</button>
+          </div>
+        </div>
+        <label class="mt-3 flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+          <input id="ck-cover" type="checkbox" checked class="accent-violet-500 w-4 h-4">
+          Incluir capa no EPUB
+        </label>
+      </div>
+
       <div class="grid lg:grid-cols-2 gap-4 mt-4">
         <div id="chapters-list" class="space-y-2 max-h-[420px] overflow-y-auto pr-1"></div>
         <div id="chapter-reader" class="paper p-6 hidden">
-          <p class="text-[11px] tracking-[.2em] uppercase text-amber-700 font-bold">Prévia do capítulo</p>
-          <h3 id="reader-title" class="text-2xl font-bold mt-1 text-stone-900"></h3>
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p id="reader-mode" class="text-[11px] tracking-[.2em] uppercase text-amber-700 font-bold">Prévia do capítulo</p>
+              <h3 id="reader-title" class="text-2xl font-bold mt-1 text-stone-900 break-words"></h3>
+            </div>
+            <div class="flex flex-wrap gap-2 shrink-0">
+              <button id="btn-reader-edit" class="px-3 py-1.5 rounded-lg text-xs font-bold border border-stone-300 text-stone-700 hover:bg-stone-100 transition">✏️ Editar</button>
+              <button id="btn-reader-save" class="hidden px-3 py-1.5 rounded-lg text-xs font-bold text-white transition" style="background:linear-gradient(135deg,#10b981,#0ea5e9)">Salvar texto</button>
+              <button id="btn-reader-cancel" class="hidden px-3 py-1.5 rounded-lg text-xs font-bold border border-stone-300 text-stone-700 hover:bg-stone-100 transition">Cancelar</button>
+            </div>
+          </div>
           <div class="w-12 h-1 rounded my-3" style="background:linear-gradient(90deg,#6366f1,#a855f7)"></div>
           <div id="reader-body" class="text-stone-700 leading-relaxed text-[15px] whitespace-pre-line max-h-[320px] overflow-y-auto"></div>
+          <p id="reader-hint" class="hidden mt-3 text-[11px] text-stone-600">💡 Chamadores de nota aparecem como <code>⟦1⟧</code> — mantenha-os no lugar para o link da nota continuar funcionando.</p>
+          <p id="reader-edited" class="hidden mt-3 text-[11px] font-semibold text-emerald-700">✎ Texto editado — estas alterações entram na exportação.</p>
+          <div id="reader-notes" class="hidden mt-4 pt-3 border-t border-stone-300 text-stone-700 text-[13px]"></div>
         </div>
       </div>
 

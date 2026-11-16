@@ -53,7 +53,61 @@
   }
 
   /* ---------- estado ---------- */
-  const estado = { arquivo: null, jobId: null, capitulos: [], timer: null, online: false };
+  const estado = {
+    arquivo: null, jobId: null, capitulos: [], timer: null, online: false,
+    capa: null,   // metadados da capa efetiva ({kind, name, bytes})
+  };
+
+  // Sem o nome amigável aqui, o selo de status mostraria o id cru do provider.
+  const PROVEDORES = { deepseek: 'DeepSeek', openai: 'OpenAI', gemini: 'Gemini', offline: 'sem IA' };
+
+  // Bandeiras por idioma. O catálogo real (código -> nome) vem de /api/config.
+  const BANDEIRAS = {
+    'pt-BR': '🇧🇷', 'pt-PT': '🇵🇹', pt: '🇵🇹', en: '🇺🇸', es: '🇪🇸', fr: '🇫🇷',
+    de: '🇩🇪', it: '🇮🇹', nl: '🇳🇱', ja: '🇯🇵', zh: '🇨🇳', ru: '🇷🇺',
+  };
+
+  function idiomaCanonico(codigo) {
+    const bruto = String(codigo || '').toLowerCase();
+    if (bruto === 'pt-br') return 'pt-BR';
+    if (bruto === 'pt-pt') return 'pt-PT';
+    return bruto;
+  }
+
+  function rotuloIdioma(codigo, nome) {
+    const canon = idiomaCanonico(codigo);
+    const bandeira = BANDEIRAS[canon] || BANDEIRAS[codigo] || '🌐';
+    const texto = String(nome || canon);
+    return bandeira + ' ' + texto.charAt(0).toUpperCase() + texto.slice(1);
+  }
+
+  /** Monta os dois selects de idioma a partir do catálogo servido pela API. */
+  function popularIdiomas(catalogo) {
+    const vistos = new Set();
+    const opcoes = Object.keys(catalogo || {}).map(codigo => ({
+      codigo: idiomaCanonico(codigo),
+      rotulo: rotuloIdioma(codigo, catalogo[codigo]),
+    })).filter(opcao => {
+      // `pt-br` e `pt-BR` canonicalizam para o mesmo código: fica um só.
+      if (vistos.has(opcao.codigo)) return false;
+      vistos.add(opcao.codigo);
+      return true;
+    }).sort((a, b) => a.rotulo.localeCompare(b.rotulo, 'pt-BR'));
+
+    const html = opcoes.map(opcao => '<option value="' + escapeHtml(opcao.codigo) +
+      '">' + escapeHtml(opcao.rotulo) + '</option>').join('');
+
+    const destino = $('#tr-to');
+    const alvoAtual = destino.value || 'pt-BR';
+    destino.innerHTML = html;
+    destino.value = opcoes.some(o => o.codigo === alvoAtual) ? alvoAtual : 'pt-BR';
+
+    const origem = $('#tr-from');
+    const origemAtual = origem.value || 'auto';
+    origem.innerHTML = '<option value="auto">🌐 Detectar automaticamente</option>' + html;
+    origem.value = (origemAtual === 'auto' || opcoes.some(o => o.codigo === origemAtual))
+      ? origemAtual : 'auto';
+  }
 
   /* ---------- status do servidor ---------- */
   function marcarOffline(motivo) {
@@ -83,10 +137,9 @@
       await api('/api/health');
       const cfg = await (await api('/api/config')).json();
       estado.online = true;
-      const nomes = { openai: 'OpenAI', gemini: 'Gemini', offline: 'sem IA' };
       const selo = $('#api-status');
       selo.innerHTML = '<span class="text-emerald-400">●</span> Conectado · ' +
-        escapeHtml(nomes[cfg.provider] || cfg.provider);
+        escapeHtml(PROVEDORES[cfg.provider] || cfg.provider);
       selo.title = cfg.configured
         ? ('Modelo: ' + cfg.translation_model)
         : 'Sem chave de IA: a tradução fica indisponível.';
@@ -99,9 +152,12 @@
       seletor.innerHTML = '<option value="">Padrão do servidor</option>' +
         opcoes.map(m => '<option value="' + escapeHtml(m) + '">' + escapeHtml(m) + '</option>').join('');
 
+      popularIdiomas(cfg.languages);
+
       if (!cfg.configured) {
         desabilitarToggle('#tg-translate', 'Nenhuma chave de IA configurada no servidor.');
         $('#tr-opts').classList.add('hidden');
+        $('#tr-privacy').classList.add('hidden');
       }
     } catch (erro) {
       marcarOffline(erro.message);
@@ -181,9 +237,14 @@
   /* ---------- iniciar job ---------- */
   ligarToggle('#tg-header');
   ligarToggle('#tg-pagenum');
-  ligarToggle('#tg-translate', () => {
-    $('#tr-opts').classList.toggle('hidden', !ligado('#tg-translate'));
-  });
+  ligarToggle('#tg-translate', atualizarAvisoTraducao);
+
+  /** Mostra as opções de tradução e o aviso de que o texto sai da máquina. */
+  function atualizarAvisoTraducao() {
+    const ativo = ligado('#tg-translate');
+    $('#tr-opts').classList.toggle('hidden', !ativo);
+    $('#tr-privacy').classList.toggle('hidden', !ativo);
+  }
 
   $('#btn-start').addEventListener('click', async () => {
     if (!estado.arquivo) { toast('Selecione um PDF primeiro.', 'err'); return; }
@@ -201,6 +262,8 @@
     dados.append('file', estado.arquivo);
     dados.append('title', $('#inp-title').value.trim() || 'Livro');
     dados.append('author', $('#inp-author').value.trim() || 'Autor');
+    dados.append('description', $('#inp-description').value.trim());
+    dados.append('publisher', $('#inp-publisher').value.trim());
     dados.append('remove_header', ligado('#tg-header'));
     dados.append('remove_page_numbers', ligado('#tg-pagenum'));
     dados.append('translate', traduzir);
@@ -256,7 +319,11 @@
     estado.capitulos = (job.chapters || []).map(c => ({
       index: c.index, title: c.title, level: c.level,
       words: c.words, preview: c.preview, included: true,
+      notes_count: c.notes_count || 0,
+      // Texto corrigido no navegador e ainda não exportado (null = original).
+      edit: null,
     }));
+    estado.capa = job.cover || null;
     const avisos = job.warnings || [];
     const caixa = $('#warn-box');
     if (avisos.length) {
@@ -267,6 +334,7 @@
       caixa.classList.add('hidden');
     }
     renderizarCapitulos();
+    atualizarCapa();
     irParaPasso(3);
     toast('Conversão concluída: ' + estado.capitulos.length + ' capítulos.', 'ok');
   }
@@ -354,6 +422,16 @@
     palavras.textContent = cap.words.toLocaleString('pt-BR') + ' pal.';
     linha.appendChild(palavras);
 
+    // As notas viram endnotes no fim do capítulo: avisar aqui evita descobrir
+    // a associação só depois de exportar o EPUB.
+    if (cap.notes_count) {
+      const notas = document.createElement('span');
+      notas.className = 'text-[11px] text-amber-300/80 shrink-0 hidden sm:inline';
+      notas.textContent = cap.notes_count + (cap.notes_count > 1 ? ' notas' : ' nota');
+      notas.title = 'Notas de rodapé deste capítulo (viram endnotes no EPUB)';
+      linha.appendChild(notas);
+    }
+
     const alternar = document.createElement('span');
     alternar.className = 'toggle ' + (cap.included ? 'on' : '');
     alternar.setAttribute('role', 'switch');
@@ -377,8 +455,17 @@
     const ver = document.createElement('button');
     ver.className = 'text-[11px] text-slate-400 hover:text-violet-300 underline shrink-0';
     ver.textContent = 'prévia';
-    ver.addEventListener('click', () => abrirPrevia(cap.index));
+    ver.addEventListener('click', () => abrirCapitulo(cap.index, false));
     linha.appendChild(ver);
+
+    const editar = document.createElement('button');
+    editar.className = 'text-[11px] underline shrink-0 ' + (cap.edit
+      ? 'text-emerald-300 font-bold'
+      : 'text-slate-400 hover:text-violet-300');
+    editar.textContent = cap.edit ? 'editado' : 'editar';
+    editar.title = 'Corrigir o texto deste capítulo antes de exportar';
+    editar.addEventListener('click', () => abrirCapitulo(cap.index, true));
+    linha.appendChild(editar);
 
     if (!contexto.ehPai) linha.classList.add('bg-white/[.02]');
     return linha;
@@ -424,18 +511,121 @@
     $('#btn-export').disabled = incluidas.length === 0;
   }
 
-  async function abrirPrevia(indice) {
+  /* ---------- painel de leitura e edição ---------- */
+  let leituraAtual = null;   // {index, title, paragraphs, notes, title_refs}
+
+  async function abrirCapitulo(indice, modoEdicao) {
     const painel = $('#chapter-reader');
+    const cap = estado.capitulos.find(c => c.index === indice);
+    if (!cap) return;
     try {
-      const detalhe = await (await api('/api/jobs/' + estado.jobId + '/chapters/' + indice)).json();
-      $('#reader-title').textContent = detalhe.title;
-      $('#reader-body').textContent = (detalhe.paragraphs || []).join('\n\n');
-      painel.classList.remove('hidden');
-      painel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const detalhe = await (await api('/api/jobs/' + estado.jobId +
+        '/chapters/' + indice)).json();
+      leituraAtual = {
+        index: indice,
+        title: detalhe.title,
+        paragraphs: (detalhe.paragraphs || []).slice(),
+        notes: detalhe.notes || [],
+        title_refs: detalhe.title_refs || [],
+      };
+      // Uma correção local ainda não exportada tem prioridade sobre o original.
+      if (Array.isArray(cap.edit) && cap.edit.length) leituraAtual.paragraphs = cap.edit.slice();
     } catch (erro) {
       toast(erro.message, 'err');
+      return;
     }
+    $('#reader-title').textContent = cap.title || leituraAtual.title;
+    definirModoLeitura(!modoEdicao);
+    painel.classList.remove('hidden');
+    painel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
+
+  function definirModoLeitura(somenteLeitura) {
+    if (!leituraAtual) return;
+    const body = $('#reader-body');
+    body.innerHTML = '';
+    if (somenteLeitura) {
+      body.className = 'text-stone-700 leading-relaxed text-[15px] whitespace-pre-line max-h-[320px] overflow-y-auto';
+      leituraAtual.paragraphs.forEach(texto => {
+        const p = document.createElement('p');
+        p.className = 'mb-3';
+        p.textContent = texto;
+        body.appendChild(p);
+      });
+    } else {
+      body.className = 'max-h-[320px] overflow-y-auto space-y-2';
+      // Um textarea por parágrafo: o usuário não precisa adivinhar separador.
+      leituraAtual.paragraphs.forEach((texto, i) => {
+        const area = document.createElement('textarea');
+        area.className = 'field w-full px-2 py-1.5 text-[14px] leading-relaxed';
+        area.rows = Math.min(12, Math.max(2, Math.ceil(texto.length / 70)));
+        area.value = texto;
+        area.setAttribute('aria-label', 'Parágrafo ' + (i + 1));
+        body.appendChild(area);
+      });
+    }
+    $('#reader-mode').textContent = somenteLeitura ? 'Prévia do capítulo' : 'Editando o capítulo';
+    $('#btn-reader-edit').classList.toggle('hidden', !somenteLeitura);
+    $('#btn-reader-save').classList.toggle('hidden', somenteLeitura);
+    $('#btn-reader-cancel').classList.toggle('hidden', somenteLeitura);
+    // A dica dos tokens ⟦N⟧ só faz sentido enquanto o texto é editável.
+    $('#reader-hint').classList.toggle('hidden', somenteLeitura || !leituraAtual.notes.length);
+    renderizarNotas(leituraAtual.notes);
+    atualizarMarcaEdicao();
+  }
+
+  function renderizarNotas(notas) {
+    const caixa = $('#reader-notes');
+    caixa.innerHTML = '';
+    if (!notas || !notas.length) { caixa.classList.add('hidden'); return; }
+    caixa.classList.remove('hidden');
+    const titulo = document.createElement('p');
+    titulo.className = 'font-bold mb-1';
+    titulo.textContent = 'Notas de rodapé (viram endnotes no fim deste capítulo)';
+    caixa.appendChild(titulo);
+    const lista = document.createElement('ol');
+    lista.className = 'list-decimal list-inside space-y-1';
+    notas.forEach(par => {
+      const li = document.createElement('li');
+      li.value = par[0];          // mantém o número do chamador no texto
+      li.textContent = par[1];
+      lista.appendChild(li);
+    });
+    caixa.appendChild(lista);
+  }
+
+  function atualizarMarcaEdicao() {
+    const cap = estado.capitulos.find(c => leituraAtual && c.index === leituraAtual.index);
+    $('#reader-edited').classList.toggle('hidden', !(cap && cap.edit));
+  }
+
+  $('#btn-reader-edit').addEventListener('click', () => definirModoLeitura(false));
+  $('#btn-reader-cancel').addEventListener('click', () => {
+    if (!leituraAtual) return;
+    const cap = estado.capitulos.find(c => c.index === leituraAtual.index);
+    if (cap && cap.edit) leituraAtual.paragraphs = cap.edit.slice();
+    definirModoLeitura(true);
+  });
+
+  $('#btn-reader-save').addEventListener('click', () => {
+    if (!leituraAtual) return;
+    const cap = estado.capitulos.find(c => c.index === leituraAtual.index);
+    if (!cap) return;
+    const textos = Array.prototype.map.call(
+      $('#reader-body').querySelectorAll('textarea'), area => area.value);
+    // Parágrafo esvaziado sai do capítulo: é assim que se remove um trecho.
+    const limpos = textos.map(t => t.trim()).filter(t => t.length > 0);
+    if (!limpos.length) {
+      toast('O capítulo ficaria vazio — use o interruptor para excluí-lo.', 'err');
+      return;
+    }
+    cap.edit = limpos;
+    cap.words = limpos.join(' ').split(/\s+/).filter(Boolean).length;
+    leituraAtual.paragraphs = limpos.slice();
+    definirModoLeitura(true);
+    renderizarCapitulos();
+    toast('Texto do capítulo atualizado.', 'ok');
+  });
 
   /* ---------- cancelar / exportar / recomeçar ---------- */
   $('#btn-cancel').addEventListener('click', async () => {
@@ -448,6 +638,15 @@
     }
   });
 
+  /** Edições locais no formato que a API espera: {índice: [parágrafos]}. */
+  function coletarEdicoes() {
+    const edicoes = {};
+    estado.capitulos.forEach(c => {
+      if (Array.isArray(c.edit) && c.edit.length) edicoes[c.index] = c.edit;
+    });
+    return edicoes;
+  }
+
   $('#btn-export').addEventListener('click', async () => {
     const incluidas = estado.capitulos.filter(c => c.included);
     if (!incluidas.length) { toast('Inclua ao menos um capítulo.', 'err'); return; }
@@ -457,7 +656,9 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chapters: estado.capitulos.map(c => ({ index: c.index, title: c.title, included: c.included }))
+          chapters: estado.capitulos.map(c => ({ index: c.index, title: c.title, included: c.included })),
+          edit: coletarEdicoes(),
+          cover: $('#ck-cover').checked,
         })
       });
       baixar(await resposta.blob(), slug(estado.titulo) + '.epub');
@@ -474,11 +675,78 @@
     estado.arquivo = null;
     estado.jobId = null;
     estado.capitulos = [];
+    estado.capa = null;
+    leituraAtual = null;
     $('#file-name').textContent = '';
     $('#file-input').value = '';
     $('#chapter-reader').classList.add('hidden');
     $('#warn-box').classList.add('hidden');
+    $('#reader-notes').classList.add('hidden');
+    $('#reader-edited').classList.add('hidden');
+    $('#reader-hint').classList.add('hidden');
+    $('#inp-description').value = '';
+    $('#inp-publisher').value = '';
+    $('#cover-input').value = '';
+    $('#ck-cover').checked = true;
+    $('#cover-thumb').removeAttribute('src');
     irParaPasso(1);
+  });
+
+  /* ---------- capa ---------- */
+  function atualizarCapa() {
+    $('#cover-input').value = '';
+    const enviada = !!estado.capa && estado.capa.kind === 'upload';
+    $('#cover-status').textContent = enviada
+      ? ('Sua capa: ' + (estado.capa.name || 'imagem enviada'))
+      : 'Capa gerada automaticamente';
+    $('#cover-hint').textContent = enviada
+      ? 'A imagem enviada substitui a capa gerada no EPUB.'
+      : 'Título e autor sobre um fundo sóbrio, em 1600×2560 (proporção KDP 1:1.6).';
+    $('#btn-cover-reset').classList.toggle('hidden', !enviada);
+    if (estado.jobId) {
+      // A prévia vem do servidor: é a mesma imagem que entra no EPUB.
+      $('#cover-thumb').src = '/api/jobs/' + estado.jobId + '/cover?t=' + Date.now();
+    }
+  }
+
+  $('#btn-cover-upload').addEventListener('click', () => $('#cover-input').click());
+
+  $('#cover-input').addEventListener('change', async () => {
+    const arquivo = $('#cover-input').files[0];
+    if (!arquivo || !estado.jobId) return;
+    if (!/^image\/(jpeg|png)$/.test(arquivo.type)) {
+      toast('A capa precisa ser uma imagem JPEG ou PNG.', 'err');
+      atualizarCapa();
+      return;
+    }
+    const dados = new FormData();
+    dados.append('file', arquivo);
+    ocupado('#btn-cover-upload', true);
+    try {
+      const resposta = await api('/api/jobs/' + estado.jobId + '/cover',
+                                 { method: 'POST', body: dados });
+      estado.capa = (await resposta.json()).cover;
+      atualizarCapa();
+      toast('Capa enviada.', 'ok');
+    } catch (erro) {
+      toast(erro.message, 'err');
+      atualizarCapa();
+    } finally {
+      ocupado('#btn-cover-upload', false);
+    }
+  });
+
+  $('#btn-cover-reset').addEventListener('click', async () => {
+    if (!estado.jobId) return;
+    try {
+      const resposta = await api('/api/jobs/' + estado.jobId + '/cover',
+                                 { method: 'DELETE' });
+      estado.capa = (await resposta.json()).cover;
+      atualizarCapa();
+      toast('Voltou para a capa gerada automaticamente.', 'info');
+    } catch (erro) {
+      toast(erro.message, 'err');
+    }
   });
 
   /* ---------- init ---------- */

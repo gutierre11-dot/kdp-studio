@@ -1,5 +1,12 @@
 # Instrução para o DeepSeek Harness
 
+> **Arquivado.** Documento do estado *anterior* à refatoração: ele descreve a
+> interface de duas abas (“Converter” e “Traduzir”), substituída pelo fluxo
+> único de 3 passos. Fica aqui só como registro histórico do que foi pedido e
+> entregue naquela rodada. A especificação vigente é
+> [`../2026-10-07-refatoracao-kdp-studio-design.md`](../2026-10-07-refatoracao-kdp-studio-design.md)
+> e o comportamento atual está no [`README.md`](../../../../README.md).
+
 > **Objetivo deste arquivo:** ser uma especificação autocontida e acionável. Copie o
 > conteúdo da seção **“PROMPT (copiar daqui para baixo)”** e entregue ao harness
 > como a tarefa a executar no repositório `kdp-studio`.

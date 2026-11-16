@@ -7,6 +7,7 @@ lanca por causa do conteudo do titulo/autor.
 """
 from __future__ import annotations
 
+import tempfile
 import unicodedata
 from pathlib import Path
 
@@ -19,6 +20,12 @@ from .kdp_epub import sanitize_text
 
 LARGURA = 1600
 ALTURA = 2560
+
+# Magic bytes das duas extensoes de imagem aceitas para capa. Detectar pelos
+# bytes (e nao pela extensao do arquivo) evita aceitar um PDF renomeado para
+# `.jpg`.
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+JPEG_MAGIC = b"\xff\xd8\xff"
 
 _FUNDO = (0.10, 0.12, 0.18)      # azul-grafite sobrio
 _TINTA = (0.94, 0.93, 0.89)      # off-white
@@ -117,3 +124,37 @@ def build_cover(title: str, author: str, out_path: Path | str,
     finally:
         doc.close()
     return destino
+
+
+def build_cover_bytes(title: str, author: str, width: int = LARGURA,
+                      height: int = ALTURA,
+                      subtitle: str | None = None) -> bytes:
+    """Gera a capa em memoria e devolve os bytes JPEG (sem tocar no disco)."""
+    with tempfile.TemporaryDirectory() as pasta:
+        caminho = Path(pasta) / "cover.jpg"
+        build_cover(title, author, caminho, width=width, height=height,
+                    subtitle=subtitle)
+        return caminho.read_bytes()
+
+
+def detectar_capa(dados: bytes) -> str:
+    """Devolve `'jpg'` ou `'png'` se `dados` for mesmo uma imagem de capa.
+
+    A decisao vem dos magic bytes **e** de uma decodificacao real com PyMuPDF.
+    Nunca da extensao do arquivo, que quem envia controla: e o que impede um
+    PDF renomeado para `.jpg` (ou um JPEG truncado) de entrar no EPUB e so
+    falhar na hora de abrir o livro no leitor.
+    """
+    if dados[:8] == PNG_MAGIC:
+        extensao = "png"
+    elif dados[:3] == JPEG_MAGIC:
+        extensao = "jpg"
+    else:
+        raise ValueError("a capa deve ser uma imagem JPEG ou PNG")
+    try:
+        pymupdf.Pixmap(dados)
+    except Exception as exc:
+        raise ValueError(
+            "a capa não pôde ser lida como imagem (arquivo corrompido ou "
+            "incompleto)") from exc
+    return extensao

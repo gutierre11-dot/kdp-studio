@@ -98,9 +98,9 @@ def model_candidates() -> list[str]:
     cfg = config.get_settings()
     provider = provider_name()
     if provider == "deepseek":
-        modelos = [cfg.deepseek_model] + list(cfg.deepseek_fallbacks)
+        modelos = [cfg.deepseek_model, *cfg.deepseek_fallbacks]
     elif provider == "gemini":
-        modelos = [cfg.gemini_model] + list(cfg.gemini_fallbacks)
+        modelos = [cfg.gemini_model, *cfg.gemini_fallbacks]
     elif provider == "openai":
         modelos = [OPENAI_DEFAULT_TRANSLATION_MODEL]
     else:

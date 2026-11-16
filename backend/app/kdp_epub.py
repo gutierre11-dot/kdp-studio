@@ -187,7 +187,9 @@ def build_toc_tree(pares: list[tuple[int, object]]) -> list:
 
 def build_epub(chapters: list[Chapter], title: str, author: str, language: str,
                out_path: Path | str, cover: bool = True,
-               cover_image: str | Path | bytes | None = None) -> Path:
+               cover_image: str | Path | bytes | None = None,
+               description: str | None = None,
+               publisher: str | None = None) -> Path:
     """Escreve o EPUB 3 de forma atomica, validando antes de publicar.
 
     Monta num temporario no mesmo diretorio, valida a integridade e so entao
@@ -195,7 +197,8 @@ def build_epub(chapters: list[Chapter], title: str, author: str, language: str,
     aparece em `output/` e o temporario e removido. Com `cover=True` (padrao)
     a capa e embutida como imagem de capa e primeira pagina: `cover_image`
     (caminho ou bytes JPEG/PNG) usa a imagem fornecida; sem ele, gera a capa
-    procedural. `cover=False` nao inclui capa.
+    procedural. `cover=False` nao inclui capa. `description` e `publisher`
+    viram `dc:description` e `dc:publisher` no OPF.
     """
     destino = Path(out_path)
     destino.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +206,8 @@ def build_epub(chapters: list[Chapter], title: str, author: str, language: str,
         f"{destino.stem}.tmp-{uuid.uuid4().hex}{destino.suffix}")
     try:
         _write_epub_file(chapters, title, author, language, temporario,
-                         cover=cover, cover_image=cover_image)
+                         cover=cover, cover_image=cover_image,
+                         description=description, publisher=publisher)
         validate_epub(temporario)
         os.replace(temporario, destino)
     except BaseException:
@@ -212,51 +216,29 @@ def build_epub(chapters: list[Chapter], title: str, author: str, language: str,
     return destino
 
 
-def _gerar_capa_bytes(title: str, author: str) -> bytes:
-    """Gera a capa num temporario e devolve os bytes do JPEG."""
-    import tempfile
-
-    from .cover import build_cover
-
-    with tempfile.TemporaryDirectory() as pasta:
-        caminho = Path(pasta) / "cover.jpg"
-        build_cover(title, author, caminho)
-        return caminho.read_bytes()
-
-
-_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-_JPEG_MAGIC = b"\xff\xd8\xff"
-
-
 def _ler_capa_externa(cover_image: str | Path | bytes
                       ) -> tuple[str, bytes]:
     """Le a capa fornecida e devolve `(extensao, bytes)`.
 
-    O tipo e detectado pelos magic bytes e, na falta deles, pela extensao do
-    arquivo. So JPEG e PNG sao aceitos (formatos de imagem de capa validos).
+    Aceita caminho ou bytes. A validacao de formato vive em
+    `cover.detectar_capa`, que e a mesma usada pelo upload da API — um unico
+    ponto decide o que conta como capa.
     """
+    from .cover import detectar_capa
+
     if isinstance(cover_image, (bytes, bytearray)):
         dados = bytes(cover_image)
-        sufixo = ""
-    else:
-        caminho = Path(cover_image)
-        dados = caminho.read_bytes()
-        sufixo = caminho.suffix.lower().lstrip(".")
-    if dados[:8] == _PNG_MAGIC:
-        return "png", dados
-    if dados[:3] == _JPEG_MAGIC:
-        return "jpg", dados
-    if sufixo in ("png",):
-        return "png", dados
-    if sufixo in ("jpg", "jpeg"):
-        return "jpg", dados
-    raise ValueError("capa deve ser uma imagem JPEG ou PNG")
+        return detectar_capa(dados), dados
+    dados = Path(cover_image).read_bytes()
+    return detectar_capa(dados), dados
 
 
 def _write_epub_file(chapters: list[Chapter], title: str, author: str,
                      language: str, out_path: Path, *,
                      cover: bool = True,
-                     cover_image: str | Path | bytes | None = None) -> Path:
+                     cover_image: str | Path | bytes | None = None,
+                     description: str | None = None,
+                     publisher: str | None = None) -> Path:
     """Montagem crua do arquivo (sem validacao nem atomicidade)."""
     from ebooklib import epub
 
@@ -272,6 +254,14 @@ def _write_epub_file(chapters: list[Chapter], title: str, author: str,
     livro.set_title(titulo_limpo)
     livro.set_language(idioma_limpo)
     livro.add_author(autor_limpo)
+    # Opcionais, mas a KDP exibe estes no preview da loja: sem descricao a
+    # ficha do livro fica incompleta para quem procura no catalogo. O ebooklib
+    # 0.18 nao expoe `set_publisher`/`add_description`: ambos entram por
+    # `add_metadata`, que e a via generica do Dublin Core.
+    if description:
+        livro.add_metadata("DC", "description", sanitize_text(description))
+    if publisher:
+        livro.add_metadata("DC", "publisher", sanitize_text(publisher))
 
     estilo = epub.EpubItem(uid="style_kdp", file_name="style/kdp.css",
                            media_type="text/css", content=KDP_CSS.encode())
@@ -279,17 +269,19 @@ def _write_epub_file(chapters: list[Chapter], title: str, author: str,
 
     pagina_capa = None
     if cover:
+        from .cover import build_cover_bytes
+
         if cover_image is not None:
             extensao, dados = _ler_capa_externa(cover_image)
         else:
-            extensao, dados = "jpg", _gerar_capa_bytes(title, author)
+            extensao, dados = "jpg", build_cover_bytes(title, author)
         nome_capa = f"cover.{extensao}"
         livro.set_cover(nome_capa, dados, create_page=False)
         capa_estilo = epub.EpubItem(
             uid="style_capa", file_name="style/capa.css",
             media_type="text/css",
-            content=("body { margin: 0; padding: 0; text-align: center; }\n"
-                     ".capa-img { width: 100%; height: 100%; }\n").encode())
+            content=(b"body { margin: 0; padding: 0; text-align: center; }\n"
+                     b".capa-img { width: 100%; height: 100%; }\n"))
         livro.add_item(capa_estilo)
         # A capa entra como primeiro item LINEAR do spine: e assim que os
         # leitores abrem o livro. Marca-la como nao-linear exigiria um link de
@@ -327,9 +319,9 @@ def _write_epub_file(chapters: list[Chapter], title: str, author: str,
             pares.append((min(max(int(capitulo.level), 1), 3), item))
 
     livro.toc = tuple(build_toc_tree(pares))
-    spine = [pagina_titulo] + itens
+    spine = [pagina_titulo, *itens]
     if pagina_capa is not None:
-        spine = [pagina_capa] + spine
+        spine = [pagina_capa, *spine]
     livro.spine = spine
     livro.add_item(epub.EpubNcx())
     livro.add_item(epub.EpubNav())

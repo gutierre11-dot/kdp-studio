@@ -6,6 +6,7 @@ vira um unico `Run` sem formatacao inline.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -52,8 +53,42 @@ class Paragraph:
         return "".join(r.text for r in self.runs)
 
     @classmethod
-    def from_text(cls, text: str) -> "Paragraph":
+    def from_text(cls, text: str) -> Paragraph:
         return cls(runs=[Run(text)])
+
+
+# Token que representa um chamador de nota superscript no texto plano. O mesmo
+# formato atravessa a traducao (o modelo tende a preservar colchetes matematicos)
+# e a edicao na interface — nos dois casos o run superscript e reconstruido no
+# ponto exato em que o token estava.
+TOKEN_NOTA_RE = re.compile(r"⟦(\d{1,3})⟧")
+
+
+def texto_editavel(paragrafo: Paragraph) -> str:
+    """Texto plano do paragrafo, com cada chamador de nota como `⟦N⟧`.
+
+    Sem o token, o chamador viraria um digito solto no meio da frase e o link
+    para a nota se perderia ao salvar o texto editado.
+    """
+    partes: list[str] = []
+    for run in paragrafo.runs:
+        texto = run.text or ""
+        if run.superscript and texto.strip().isdigit():
+            partes.append(f"⟦{int(texto.strip())}⟧")
+        else:
+            partes.append(texto)
+    return "".join(partes)
+
+
+def paragrafo_de_texto(texto: str) -> Paragraph:
+    """Paragrafo a partir do texto plano, devolvendo `⟦N⟧` a run superscript."""
+    runs: list[Run] = []
+    for i, parte in enumerate(TOKEN_NOTA_RE.split(texto)):
+        if i % 2 == 1:   # grupo capturado: o numero do chamador
+            runs.append(Run(parte, superscript=True))
+        elif parte:
+            runs.append(Run(parte))
+    return Paragraph(runs=runs or [Run("")])
 
 
 @dataclass(slots=True)
@@ -87,6 +122,9 @@ class ChapterView:
     words: int
     preview: str
     included: bool = True
+    # Quantidade de notas de rodape do capitulo, para a interface avisar que
+    # ha endnotes a revisar mesmo sem carregar o texto completo.
+    notes_count: int = 0
 
 
 @dataclass
@@ -103,6 +141,10 @@ class JobState:
     stage: str = ""
     progress: int = 0
     message: str = ""
+    # Metadados opcionais do livro, que viram `dc:description` e
+    # `dc:publisher` no OPF do EPUB.
+    description: str = ""
+    publisher: str = ""
     chapters: list[Chapter] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
@@ -111,9 +153,15 @@ class JobState:
     cancel: threading.Event = field(default_factory=threading.Event)
     created_at: float = field(default_factory=time.time)
     output_paths: list[Path] = field(default_factory=list)
+    # Capa enviada pelo usuario (JPEG ou PNG). Sem ela, o EPUB recebe a capa
+    # procedural gerada a partir de titulo e autor.
+    cover_image: bytes | None = None
+    cover_name: str | None = None
 
     @classmethod
     def new(cls, job_id: str, *, title: str, author: str, language: str,
-            source_name: str, translated: bool) -> "JobState":
+            source_name: str, translated: bool, description: str = "",
+            publisher: str = "") -> JobState:
         return cls(id=job_id, title=title, author=author, language=language,
-                   source_name=source_name, translated=translated)
+                   source_name=source_name, translated=translated,
+                   description=description, publisher=publisher)

@@ -31,3 +31,13 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+# Conjunto explicito de regras: o padrao do ruff muda entre versoes e uma
+# regra nova ligada sozinha nao deve quebrar o CI sem ninguem mexer no codigo.
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    # O FastAPI exige `File(...)`/`Form(...)` como valor padrao do parametro:
+    # e a assinatura da rota, nao um argumento mutavel por acidente.
+    "B008",
+]

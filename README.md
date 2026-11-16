@@ -10,10 +10,14 @@ Dois caminhos, um só pipeline:
 2. **PDF (outro idioma) → tradução → EPUB pt-BR**: traduz em lote com progresso
    real e gera o EPUB no idioma de destino.
 
+Antes de exportar, o passo de **revisão** permite renomear e reordenar capítulos,
+ligar/desligar cada um, **corrigir o texto parágrafo a parágrafo**, conferir as
+**notas de rodapé** (que saem como endnotes) e **enviar a capa do autor**.
+
 - **Backend:** FastAPI (`backend/app/`)
 - **Frontend:** SPA sem build (`static/` — abra via backend, não como arquivo)
 - **Saída:** EPUB gerado em `output/`
-- **Testes:** `pytest` (`tests/`)
+- **Testes:** `pytest` (`tests/`) · **Lint:** `ruff` · **CI:** GitHub Actions
 
 ## 🚀 Como rodar
 
@@ -67,6 +71,7 @@ Mantenha **um único** `.env`.
 | `LLM_MAX_RETRIES` | `3` | rodadas completas pela cadeia de modelos |
 | `LLM_MAX_TOTAL_SECONDS` | `180` | teto de tempo de **uma** chamada de chat, somando modelos e rodadas |
 | `MAX_UPLOAD_MB` | `100` | tamanho máximo do PDF |
+| `MAX_COVER_MB` | `10` | tamanho máximo da capa enviada |
 | `JOB_TTL_SECONDS` / `JOB_MAX` / `JOB_WORKERS` | `7200` / `50` / `2` | retenção e paralelismo dos jobs |
 | `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | origens permitidas |
 | `HOST` / `PORT` / `RELOAD` | `127.0.0.1` / `8000` / `0` | servidor |
@@ -82,10 +87,13 @@ Mantenha **um único** `.env`.
 |---|---|---|
 | GET | `/api/health` | status |
 | GET | `/api/config` | provider ativo, modelos, limites e idiomas |
-| POST | `/api/jobs` | multipart `file`, `title`, `author`, `translate`, `source_lang`, `target_lang`, `translation_model`, `remove_header`, `remove_page_numbers` → `201 {job_id}` |
-| GET | `/api/jobs/{id}` | `status`, `stage`, `progress`, `message`, `warnings`, `error` e metadados dos capítulos |
-| GET | `/api/jobs/{id}/chapters/{i}` | texto completo de um capítulo |
-| POST | `/api/jobs/{id}/export` | JSON `{chapters:[{index,title,included}], edit?}` → arquivo `application/epub+zip` |
+| POST | `/api/jobs` | multipart `file`, `title`, `author`, `description`, `publisher`, `translate`, `source_lang`, `target_lang`, `translation_model`, `remove_header`, `remove_page_numbers` → `201 {job_id}` |
+| GET | `/api/jobs/{id}` | `status`, `stage`, `progress`, `message`, `description`, `publisher`, `cover`, `warnings`, `error` e metadados dos capítulos |
+| GET | `/api/jobs/{id}/chapters/{i}` | texto completo do capítulo, com `notes` e `title_refs` |
+| GET | `/api/jobs/{id}/cover` | imagem efetiva do job (a enviada, ou a procedural) como `image/jpeg`/`image/png` |
+| POST | `/api/jobs/{id}/cover` | multipart `file` (JPEG/PNG) → substitui a capa do job |
+| DELETE | `/api/jobs/{id}/cover` | descarta a capa enviada e volta para a procedural |
+| POST | `/api/jobs/{id}/export` | JSON `{chapters:[{index,title,included}], edit?, cover?}` → arquivo `application/epub+zip` |
 | POST | `/api/jobs/{id}/cancel` | cancela a tradução em andamento |
 | DELETE | `/api/jobs/{id}` | descarta o job e seus artefatos |
 | GET | `/download/{arquivo}` | arquivos gerados |
@@ -93,6 +101,9 @@ Mantenha **um único** `.env`.
 Códigos de erro: `400` requisição inválida, `404` job inexistente, `409` job em
 `error`/`cancelled`, `413` arquivo acima do limite, `422` PDF sem texto
 extraível (OCR de PDFs escaneados não é suportado).
+
+A ordem de precedência da capa é: **imagem enviada** → capa procedural; o
+`cover: false` no corpo da exportação remove a capa do EPUB, enviada ou não.
 
 ## 🧠 Como os capítulos são detectados
 
@@ -140,15 +151,41 @@ cada nota traz o **link de volta** ao chamador (`epub:type="backlink"`). Quando
 um capítulo é dividido em continuações, as notas são distribuídas pela parte que
 as chama para os links continuarem resolvendo dentro do mesmo arquivo.
 
+## 🔎 Revisão antes de exportar
+
+O passo 3 é onde o livro é conferido: cada capítulo aparece com o título editável,
+o interruptor de inclusão e a contagem de notas. O botão **editar** abre o texto
+completo do capítulo em um campo por parágrafo — corrigir, apagar um trecho ou
+reescrever é local ao navegador e entra no EPUB pelo campo `edit` da exportação.
+Esgotar todos os parágrafos de um capítulo é recusado: para tirá-lo do livro, use
+o interruptor.
+
+As **notas de rodapé aparecem no fim da prévia do capítulo**, na mesma ordem em
+que saem no EPUB. Sem isso, a única forma de conferir a associação das notas era
+abrir o arquivo já exportado.
+
 ## 🎨 Capa
 
 Com `cover=True` (padrão), uma **capa procedural** de **1600×2560** (proporção
 KDP 1:1.6) é gerada em JPEG com PyMuPDF — sem dependência extra — com título e
-autor sobre fundo e moldura sóbrios. Também é possível fornecer uma **capa
-externa** via `build_epub(..., cover_image=...)`: aceita caminho (`str`/`Path`)
-ou `bytes` de uma imagem **JPEG ou PNG**, detectada pelos *magic bytes*. A capa
-entra como imagem de capa, `capa.xhtml` é o primeiro item do spine e a página de
-título vem logo depois.
+autor sobre fundo e moldura sóbrios.
+
+O autor pode enviar a **própria capa** pelo passo 3 (JPEG ou PNG, até
+`MAX_COVER_MB`): a imagem é validada pelos *magic bytes* **e** por uma
+decodificação real com PyMuPDF, então um PDF renomeado para `.jpg` é recusado na
+hora, com mensagem clara, em vez de virar página em branco no leitor. A prévia
+mostrada na tela vem do próprio servidor — é exatamente a imagem que entra no
+EPUB. O botão “usar capa gerada” descarta o envio.
+
+Programaticamente, `build_epub(..., cover_image=...)` aceita caminho
+(`str`/`Path`) ou `bytes`; `cover=False` omite a capa. A capa entra como imagem
+de capa, `capa.xhtml` é o primeiro item do spine e a página de título vem logo
+depois.
+
+Título, autor, **descrição** e **editora** viram metadados Dublin Core do OPF
+(`dc:title`, `dc:creator`, `dc:description`, `dc:publisher`), que a KDP usa no
+preview da loja. Descrição e editora são opcionais e não geram tag vazia quando
+não informadas.
 
 ## 📁 Estrutura
 
@@ -164,19 +201,23 @@ kdp-studio/
 │   ├── pdf_chapters.py  # bookmarks + índice impresso + heurística + notas
 │   ├── translate.py     # tradução em lote, paralela, com progresso
 │   ├── kdp_epub.py      # EPUB 3 (notas, capa), escrita atômica e validação
-│   ├── cover.py         # capa procedural JPEG 1600x2560 via PyMuPDF
+│   ├── cover.py         # capa procedural, validação de capa enviada
 │   └── main.py          # rotas
 ├── static/{index.html,app.js,styles.css,vendor/tailwind.js}
 ├── tests/               # unitários, API e aceitação (sintética + PDFs reais)
 ├── configurar-ia.sh     # configuração interativa da chave de IA
-└── docs/superpowers/    # spec e plano da refatoração
+├── .github/workflows/   # CI: lint + testes em Python 3.10 e 3.13
+└── docs/superpowers/    # specs e plano (o que ficou obsoleto vai em archive/)
 ```
 
-## 🧪 Testes
+## 🧪 Testes e lint
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
 python3 -m pytest -q          # suíte completa (offline, sem chamadas de LLM)
+
+npm run lint                  # ruff, com o conjunto de regras do pyproject.toml
+npm run check                 # lint + byte-compile do backend + sintaxe do app.js
 
 # aceitação: roda a sintética (notas + capa) sempre e a de PDFs reais só se a
 # variável apontar para um diretório com os livros:
@@ -190,6 +231,9 @@ quando a variável não existe.
 
 A suíte nunca chama a API real: a fixture `offline` transforma qualquer criação
 de cliente de LLM em erro.
+
+O CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) roda lint e testes
+em Python 3.10 e 3.13 a cada push e pull request.
 
 Smoke test:
 
@@ -211,11 +255,20 @@ curl -s localhost:8000/api/config     # provider, modelos, limites
   posição.
 - A detecção por heurística (PDFs sem bookmarks nem índice) é menos precisa que
   a via bookmarks e pode exigir revisão manual dos títulos.
+- A **capa enviada** é validada quanto ao formato e à legibilidade, não quanto à
+  proporção: uma imagem fora de 1:1.6 é aceita como está e a KDP pode recusá-la
+  no upload.
+- A **edição de texto** vive no navegador até a exportação: recarregar a página
+  descarta as correções não exportadas.
+- Os **jobs vivem em memória**: reiniciar o servidor descarta jobs, capas
+  enviadas e edições pendentes. O EPUB já baixado não é afetado.
+- Com **tradução ativada**, o texto do livro é enviado à API do provedor de IA
+  escolhido; sem o toggle, nada sai da máquina.
 
 ## 📌 Escopo
 
-Esta versão foca em **PDF → EPUB** e **tradução**. A **geração de capa** faz
-parte do escopo (procedural e por imagem externa — ver “🎨 Capa”). Foram
-removidos da base anterior: o assistente de criação de livros com IA, a
-exportação DOCX e a biblioteca de arquivos. O histórico está no git (o estado
-anterior à refatoração é o commit `957c3fa`).
+Esta versão foca em **PDF → EPUB**, **revisão do texto e dos capítulos** e
+**tradução**. A **capa** faz parte do escopo, procedural e por imagem enviada
+pelo autor (ver “🎨 Capa”). Foram removidos da base anterior: o assistente de
+criação de livros com IA, a exportação DOCX e a biblioteca de arquivos. O
+histórico está no git (o estado anterior à refatoração é o commit `957c3fa`).

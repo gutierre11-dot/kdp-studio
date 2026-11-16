@@ -10,18 +10,14 @@ from __future__ import annotations
 
 import re
 import threading
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from typing import Callable
 
 from . import llm
-from .models import Chapter, Paragraph, Run
+from .models import TOKEN_NOTA_RE, Chapter, Paragraph, Run, texto_editavel
 
 DEFAULT_TARGET_LANG = "pt-BR"
 DEFAULT_SOURCE_LANG = "auto"
-
-# Token que substitui um chamador de nota superscript durante a traducao. O
-# formato com colchetes matematicos e raro no texto e sobrevive ao modelo.
-_TOKEN_RE = re.compile(r"⟦(\d{1,3})⟧")
 
 
 class CancelledError(RuntimeError):
@@ -232,7 +228,7 @@ def montar_unidades(paragrafos: list[str],
             unidades.extend(([i], parte)
                             for parte in split_chunks(paragrafo, limite))
             continue
-        candidato = "\n\n".join(textos + [paragrafo])
+        candidato = "\n\n".join([*textos, paragrafo])
         if indices and len(candidato) > limite:
             unidades.append((indices, "\n\n".join(textos)))
             indices, textos = [i], [paragrafo]
@@ -250,22 +246,6 @@ def _numeros_superscript(paragrafo: Paragraph) -> list[int]:
             if getattr(r, "superscript", False) and r.text.strip().isdigit()]
 
 
-def _tokenizar(paragrafo: Paragraph) -> str:
-    """Texto do paragrafo com cada chamador superscript trocado por ⟦N⟧.
-
-    O token viaja pelo modelo na posicao original; a reconstrucao usa essa
-    posicao para devolver o run superscript.
-    """
-    partes: list[str] = []
-    for run in paragrafo.runs:
-        texto = run.text or ""
-        if getattr(run, "superscript", False) and texto.strip().isdigit():
-            partes.append(f"⟦{int(texto.strip())}⟧")
-        else:
-            partes.append(texto)
-    return "".join(partes)
-
-
 def _reconstruir_paragrafo(original: Paragraph, tokenizado: str,
                            traduzido: str) -> tuple[Paragraph, list[int]]:
     """Devolve `(paragrafo, numeros_perdidos)` a partir da traducao.
@@ -276,7 +256,7 @@ def _reconstruir_paragrafo(original: Paragraph, tokenizado: str,
     """
     if traduzido == tokenizado:
         return original, []
-    partes = _TOKEN_RE.split(traduzido)
+    partes = TOKEN_NOTA_RE.split(traduzido)
     runs: list[Run] = []
     encontrados: set[int] = set()
     for i, parte in enumerate(partes):
@@ -299,7 +279,10 @@ def _reconstruir_paragrafos(originais: list[Paragraph],
                             warn: Callable[[str], None]) -> list[Paragraph]:
     """Reconstroi os runs (e chamadores) apos a traducao."""
     saida: list[Paragraph] = []
-    for original, tokenizado, traduzido in zip(originais, tokenizados, novos):
+    # As tres listas sao paralelas por construcao: `tokenizados` tem uma
+    # entrada por paragrafo e `novos` uma por entrada de `tokenizados`.
+    for original, tokenizado, traduzido in zip(originais, tokenizados, novos,
+                                               strict=True):
         paragrafo, perdidos = _reconstruir_paragrafo(original, tokenizado,
                                                      traduzido)
         if perdidos:
@@ -319,7 +302,7 @@ def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
                        continues=chapter.continues,
                        notes=list(chapter.notes),
                        title_refs=list(chapter.title_refs))
-    tokenizados = [_tokenizar(p) for p in chapter.paragraphs]
+    tokenizados = [texto_editavel(p) for p in chapter.paragraphs]
     sistema = build_system_prompt(source_lang, target_lang, title=title,
                                   chapter_title=chapter.title)
     titulo = _traduzir_titulo(chapter.title, build_title_prompt(target_lang),
@@ -329,7 +312,11 @@ def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
     for indices, texto in montar_unidades(tokenizados, chunk_chars):
         traduzidos = _traduzir_bloco(texto, len(indices), sistema, model,
                                      warn, chapter.title)
-        for i, trecho in zip(indices, traduzidos):
+        # B905: `_traduzir_bloco` pode devolver menos trechos que `indices`
+        # quando a cadeia de modelos esta fora (devolve o texto original
+        # re-dividido). `strict=True` aqui trocaria "parametrica parcial" por
+        # excecao e derrubaria o capitulo inteiro; o zip curto e o desejado.
+        for i, trecho in zip(indices, traduzidos):  # noqa: B905
             por_indice.setdefault(i, []).append(trecho)
 
     novos: list[str] = []
@@ -365,7 +352,7 @@ def translate_chapters(
     for ci, capitulo in enumerate(chapters):
         if capitulo.title.strip():
             unidades.append((ci, None, capitulo.title))
-        tokenizados = [_tokenizar(p) for p in capitulo.paragraphs]
+        tokenizados = [texto_editavel(p) for p in capitulo.paragraphs]
         tokenizados_por_cap[ci] = tokenizados
         for indices, texto in montar_unidades(tokenizados, chunk_chars):
             unidades.append((ci, indices, texto))
@@ -430,7 +417,9 @@ def translate_chapters(
                     if indices is None:
                         titulos[ci] = resultado[0]
                     else:
-                        for i, trecho in zip(indices, resultado):
+                        # Mesma tolerancia do caminho serial: menos trechos que
+                        # `indices` significa cadeia de modelos fora.
+                        for i, trecho in zip(indices, resultado):  # noqa: B905
                             traducao[ci].setdefault(i, []).append(trecho)
                     avisos.extend(locais)
                     if progress is not None:
@@ -460,9 +449,12 @@ def translate_chapters(
 
     mudou = any(
         novo != original
-        for cap_original, cap_novo in zip(chapters, saida)
+        # `saida` recebe um capitulo por capitulo de `chapters`, e
+        # `_reconstruir_paragrafos` devolve um paragrafo por paragrafo.
+        for cap_original, cap_novo in zip(chapters, saida, strict=True)
         for original, novo in zip((p.text for p in cap_original.paragraphs),
-                                  (p.text for p in cap_novo.paragraphs))
+                                  (p.text for p in cap_novo.paragraphs),
+                                  strict=True)
     )
     if not mudou and any(c.paragraphs for c in chapters):
         # Nada mudou: nenhum modelo respondeu. Reportar sucesso aqui seria
