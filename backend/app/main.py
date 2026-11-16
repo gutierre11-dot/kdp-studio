@@ -107,9 +107,17 @@ async def _ler_upload(arquivo: UploadFile, limite: int) -> bytes:
 def _capa_de(job: JobState) -> dict:
     """Estado da capa: enviada pelo usuario ou procedural a partir do titulo."""
     if job.cover_image:
+        largura, altura = job.cover_width, job.cover_height
+        proporcao_ok = cover.proporcao_kdp_ok(largura, altura)
+        hint = ""
+        if not proporcao_ok:
+            hint = ("A imagem enviada não está em 1:1.6 (1600x2560); a KDP "
+                    "pode recusá-la no upload. A conversão não bloqueia.")
         return {"kind": "upload", "name": job.cover_name or "capa",
-                "bytes": len(job.cover_image)}
-    return {"kind": "procedural", "name": None, "bytes": 0}
+                "bytes": len(job.cover_image), "width": largura,
+                "height": altura, "aspect_ok": proporcao_ok, "hint": hint}
+    return {"kind": "procedural", "name": None, "bytes": 0,
+            "width": 1600, "height": 2560, "aspect_ok": True, "hint": ""}
 
 
 def _tem_texto(capitulos: list[Chapter]) -> bool:
@@ -158,7 +166,8 @@ def _selecionar_capitulos(job: JobState, selecao: Any, edicoes: Any) -> list[Cha
         saida.append(Chapter(titulo or capitulo.title, capitulo.level, paragrafos,
                              continues=capitulo.continues,
                              notes=list(capitulo.notes),
-                             title_refs=list(capitulo.title_refs)))
+                             title_refs=list(capitulo.title_refs),
+                             figures=list(capitulo.figures)))
     return saida
 
 
@@ -326,6 +335,14 @@ def obter_capitulo(job_id: str, index: int) -> dict:
     if not 0 <= index < len(job.chapters):
         raise HTTPException(404, f"o capítulo {index} não existe neste job")
     capitulo = job.chapters[index]
+    figuras = [{
+        "index": i,
+        "after_paragraph": figura.after_paragraph,
+        "width": figura.width,
+        "height": figura.height,
+        "alt": figura.alt,
+        "url": f"/api/jobs/{job_id}/chapters/{index}/figures/{i}",
+    } for i, figura in enumerate(capitulo.figures)]
     return {"index": index, "title": capitulo.title, "level": capitulo.level,
             # Texto plano com os chamadores de nota como `⟦N⟧`: e o mesmo texto
             # que a edicao devolve na exportacao, entao o link da nota nao se
@@ -334,7 +351,26 @@ def obter_capitulo(job_id: str, index: int) -> dict:
             # Notas sao endnotes: precisam chegar a revisao, senao o usuario so
             # descobre se a associacao saiu certa abrindo o EPUB ja exportado.
             "notes": [[numero, texto] for numero, texto in capitulo.notes],
-            "title_refs": list(capitulo.title_refs)}
+            "title_refs": list(capitulo.title_refs),
+            "figures": figuras}
+
+
+@app.get("/api/jobs/{job_id}/chapters/{index}/figures/{figure_index}")
+def obter_figura(job_id: str, index: int, figure_index: int) -> Response:
+    """Bytes de uma figura extraida do PDF (previa na revisao)."""
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(404, f"job {job_id} não encontrado")
+    if not 0 <= index < len(job.chapters):
+        raise HTTPException(404, f"o capítulo {index} não existe neste job")
+    figuras = job.chapters[index].figures
+    if not 0 <= figure_index < len(figuras):
+        raise HTTPException(404, f"a figura {figure_index} não existe "
+                                 "neste capítulo")
+    figura = figuras[figure_index]
+    media = "image/png" if figura.ext == "png" else "image/jpeg"
+    return Response(content=figura.data, media_type=media,
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.get("/api/jobs/{job_id}/cover")
@@ -366,12 +402,14 @@ async def enviar_capa(job_id: str, file: UploadFile = File(...)) -> dict:
         extensao = cover.detectar_capa(dados)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    largura, altura = cover.dimensoes_capa(dados)
     # O nome fica so para exibicao, mas precisa carregar a extensao real: e
     # dela que `capa_atual` deriva o Content-Type da previa.
     nome = (file.filename or "").strip() or "capa"
     if not nome.lower().endswith((".jpg", ".jpeg", ".png")):
         nome = f"{nome}.{extensao}"
-    store.update(job_id, cover_image=dados, cover_name=nome[:120])
+    store.update(job_id, cover_image=dados, cover_name=nome[:120],
+                 cover_width=largura, cover_height=altura)
     return {"ok": True, "cover": _capa_de(job)}
 
 
@@ -381,7 +419,8 @@ def remover_capa(job_id: str) -> dict:
     job = store.get(job_id)
     if job is None:
         raise HTTPException(404, f"job {job_id} não encontrado")
-    store.update(job_id, cover_image=None, cover_name=None)
+    store.update(job_id, cover_image=None, cover_name=None,
+                 cover_width=0, cover_height=0)
     return {"ok": True, "cover": _capa_de(job)}
 
 

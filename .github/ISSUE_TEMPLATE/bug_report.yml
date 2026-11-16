@@ -1,0 +1,83 @@
+name: Relatório de bug
+description: Reporte um comportamento incorreto, um erro ou uma falha na conversão.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por reportar. Preencha os campos abaixo com o máximo de detalhe.
+        **Não inclua chaves de API, dados pessoais ou conteúdo protegido por
+        direitos autorais.** Para vulnerabilidades, use o canal privado descrito
+        em SECURITY.md — não abra uma issue pública.
+  - type: textarea
+    id: descricao
+    attributes:
+      label: Descrição
+      description: O que aconteceu? Inclua a mensagem de erro exibida, se houver.
+    validations:
+      required: true
+  - type: textarea
+    id: passos
+    attributes:
+      label: Passos para reproduzir
+      description: Liste a sequência mínima que reproduz o problema.
+      placeholder: |
+        1. Abra o app em 127.0.0.1:8000
+        2. Envie o PDF ...
+        3. Ative a tradução para ...
+        4. Clique em ...
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: Comportamento esperado
+      description: O que você esperava que acontecesse?
+    validations:
+      required: true
+  - type: textarea
+    id: pdf-exemplo
+    attributes:
+      label: PDF de exemplo
+      description: |
+        Descreva as características do PDF (origem, número de páginas, presença
+        de bookmarks ou índice impresso). Se puder compartilhar um arquivo,
+        anexe apenas um exemplo **sem conteúdo protegido** e criado por você.
+        Não envie livros de terceiros.
+      placeholder: "Ex.: PDF de 120 páginas gerado por mim, com sumário embutido, sem notas."
+    validations:
+      required: false
+  - type: input
+    id: python
+    attributes:
+      label: Versão do Python
+      description: Saída de `python3 --version`.
+      placeholder: "3.13.1"
+    validations:
+      required: true
+  - type: input
+    id: sistema
+    attributes:
+      label: Sistema operacional
+      description: Distribuição/versão e, se relevante, como o projeto foi iniciado.
+      placeholder: "Ubuntu 24.04, ./run.sh"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs relevantes
+      description: |
+        Cole apenas as linhas relevantes do terminal ou do log do servidor.
+        Remova caminhos pessoais, chaves, tokens e conteúdo do livro.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: dados-sensiveis
+    attributes:
+      label: Confirmação
+      options:
+        - label: Removi deste relatório chaves de API, tokens, dados pessoais e conteúdo protegido por direitos autorais.
+          required: true

@@ -57,22 +57,45 @@ _STOPWORDS: dict[str, set[str]] = {
            "den", "sich", "auf", "dem", "des"},
     "it": {"il", "la", "di", "che", "un", "una", "per", "con", "non", "del",
            "della", "sono", "come", "gli"},
+    "nl": {"de", "het", "een", "van", "en", "in", "is", "dat", "op", "te",
+           "voor", "met", "zijn", "niet", "aan", "er", "om", "ook", "als",
+           "dan", "maar", "door", "bij"},
+    "ru": {"и", "в", "не", "что", "он", "на", "я", "с", "как", "это", "по",  # noqa: RUF001
+           "но", "к", "у", "из", "за", "от", "так", "же", "было", "для",  # noqa: RUF001
+           "его", "она", "они", "мы", "вы"},  # noqa: RUF001
 }
 
 # Codigo do detector -> codigo usado no EPUB (dc:language).
 _LANG_CODES = {"pt": "pt-BR", "en": "en", "es": "es", "fr": "fr",
-               "de": "de", "it": "it"}
+               "de": "de", "it": "it", "nl": "nl", "ru": "ru",
+               "ja": "ja", "zh": "zh"}
+
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
+_CIRILICO_RE = re.compile(r"[\u0400-\u04ff]")
 
 
 def detect_language(text: str, default: str = DEFAULT_TARGET_LANG) -> str:
-    """Estimativa simples do idioma do texto, por palavras funcionais.
+    """Estimativa simples do idioma do texto.
 
     Usada apenas para preencher `dc:language` quando o usuario nao informa o
-    idioma e nao ha traducao; nao afeta o texto do livro.
+    idioma e nao ha traducao; nao afeta o texto do livro. Cobre os idiomas
+    latinos mais comuns, russo (por palavra funcional) e japones/chines (por
+    escrita), que nao tem separacao por espaco.
     """
-    palavras = re.findall(r"[a-z\u00e0-\u00ff]+", (text or "").lower())[:4000]
+    bruto = text or ""
+    kana = len(_KANA_RE.findall(bruto))
+    han = len(_HAN_RE.findall(bruto))
+    if kana >= 4:
+        return _LANG_CODES["ja"]
+    if han >= 20:
+        return _LANG_CODES["zh"]
+    cirilico = len(_CIRILICO_RE.findall(bruto))
+    palavras = re.findall(r"[^\W\d_]+", bruto.lower())[:4000]
     if not palavras:
         return default
+    if cirilico >= max(20, len(bruto) * 0.15):
+        return _LANG_CODES["ru"]
     contagem = {codigo: sum(1 for p in palavras if p in palavras_chave)
                 for codigo, palavras_chave in _STOPWORDS.items()}
     melhor = max(contagem, key=lambda c: contagem[c])
@@ -301,7 +324,8 @@ def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
         return Chapter(chapter.title, chapter.level, [],
                        continues=chapter.continues,
                        notes=list(chapter.notes),
-                       title_refs=list(chapter.title_refs))
+                       title_refs=list(chapter.title_refs),
+                       figures=list(chapter.figures))
     tokenizados = [texto_editavel(p) for p in chapter.paragraphs]
     sistema = build_system_prompt(source_lang, target_lang, title=title,
                                   chapter_title=chapter.title)
@@ -328,7 +352,8 @@ def translate_chapter(chapter: Chapter, *, title: str, source_lang: str,
                                            novos, warn),
                    continues=chapter.continues,
                    notes=list(chapter.notes),
-                   title_refs=list(chapter.title_refs))
+                   title_refs=list(chapter.title_refs),
+                   figures=list(chapter.figures))
 
 
 def translate_chapters(
@@ -445,7 +470,8 @@ def translate_chapters(
                                     avisos.append),
             continues=capitulo.continues,
             notes=list(capitulo.notes),
-            title_refs=list(capitulo.title_refs)))
+            title_refs=list(capitulo.title_refs),
+            figures=list(capitulo.figures)))
 
     mudou = any(
         novo != original

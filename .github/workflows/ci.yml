@@ -27,6 +27,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # O frontend nao possui dependencias npm, mas a checagem de sintaxe exige
+      # um runtime Node explicito em vez de depender da imagem do runner.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Instalar dependencias
         run: python -m pip install -r requirements-dev.txt
 
@@ -37,6 +43,9 @@ jobs:
         # `-o addopts=""` para o resumo aparecer no log do CI: o addopts do
         # pyproject e `-q`, que esconde a contagem por arquivo.
         run: python -m pytest -o addopts="" -q
+
+      - name: Byte-compile do backend
+        run: python -m compileall -q backend/app
 
       - name: Sintaxe do frontend
         run: node --check static/app.js

@@ -1,0 +1,52 @@
+name: Proposta de melhoria
+description: Sugira uma funcionalidade ou uma melhoria de uso para o KDP Studio.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Antes de enviar, confira se a proposta cabe no escopo **local-first** do
+        projeto: tudo roda na máquina de quem usa, sem telemetria e sem serviço
+        central. Para vulnerabilidades, use o canal privado descrito em
+        SECURITY.md.
+  - type: textarea
+    id: problema
+    attributes:
+      label: Problema
+      description: Qual dificuldade ou limitação motivou a proposta? Quem é afetado?
+    validations:
+      required: true
+  - type: textarea
+    id: solucao
+    attributes:
+      label: Solução proposta
+      description: Descreva o comportamento desejado e como ele seria usado.
+    validations:
+      required: true
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Alternativas consideradas
+      description: Outras abordagens, contornos manuais ou soluções existentes que você avaliou.
+    validations:
+      required: false
+  - type: dropdown
+    id: escopo
+    attributes:
+      label: Escopo
+      description: Área principal da proposta.
+      options:
+        - Conversão PDF → EPUB
+        - Tradução
+        - Interface (UI)
+        - Outro
+    validations:
+      required: true
+  - type: checkboxes
+    id: local-first
+    attributes:
+      label: Confirmação
+      options:
+        - label: A proposta cabe no escopo local-first, sem telemetria e sem depender de um serviço central do projeto.
+          required: true

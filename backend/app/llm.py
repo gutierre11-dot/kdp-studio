@@ -214,7 +214,7 @@ def chat(system: str, user: str, *, model: str | None = None,
     """
     if not is_configured():
         raise LLMError("Nenhuma chave de IA configurada "
-                       "(OPENAI_API_KEY/GEMINI_API_KEY).")
+                       "(DEEPSEEK_API_KEY, OPENAI_API_KEY ou GEMINI_API_KEY).")
     cfg = config.get_settings()
     candidatos = [model] if model else model_candidates()
     if model is None:
@@ -247,5 +247,10 @@ def chat(system: str, user: str, *, model: str | None = None,
         if esgotado:
             break
     resumo = "; ".join(erros[:3]) if erros else "sem resposta"
+    dica = {
+        "deepseek": "DEEPSEEK_MODEL/DEEPSEEK_MODEL_FALLBACKS",
+        "openai": "TRANSLATION_MODEL/OPENAI_API_KEY",
+        "gemini": "GEMINI_MODEL/GEMINI_MODEL_FALLBACKS",
+    }.get(provider_name(), "a configuração do provider")
     raise LLMError(f"Nenhum modelo respondeu ({resumo}). Verifique "
-                   f"GEMINI_MODEL/GEMINI_MODEL_FALLBACKS e sua conexão.")
+                   f"{dica} e sua conexão.")

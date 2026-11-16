@@ -5,8 +5,8 @@
   --accent1:#6366f1; --accent2:#a855f7; --accent3:#f59e0b;
 }
 html{scroll-behavior:smooth}
-body{font-family:'Inter',system-ui,sans-serif;background:#07070f;}
-.font-display{font-family:'Playfair Display',serif}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#07070f;}
+.font-display{font-family:Georgia,'Times New Roman',serif}
 
 /* ---- scrollbar ---- */
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -87,7 +87,7 @@ button[aria-busy="true"]{cursor:progress;opacity:.7;pointer-events:none}
 
 /* ---- prévia em papel ---- */
 .paper{background:linear-gradient(180deg,#fffdf7,#faf6ec);color:#2b2417;border-radius:10px;box-shadow:0 30px 60px -20px rgba(0,0,0,.6)}
-.paper h3{font-family:'Playfair Display',serif}
+.paper h3{font-family:Georgia,'Times New Roman',serif}
 
 /* ---- mobile ---- */
 @media (max-width:640px){

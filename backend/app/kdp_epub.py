@@ -7,6 +7,7 @@ invalido chega ao diretorio de saida.
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import os
 import re
@@ -61,6 +62,10 @@ aside.notas ol { padding-left: 1.4em; }
 aside.notas li { margin-bottom: .4em; }
 aside.notas p { text-indent: 0; margin: 0; }
 a.noteref-back { text-decoration: none; }
+figure.figura { margin: 1.4em 0; text-align: center; page-break-inside: avoid; }
+figure.figura img { max-width: 100%; height: auto; }
+figure.figura figcaption { font-size: .85em; color: #444; margin-top: .4em;
+                           text-indent: 0; text-align: center; }
 .capa-img { width: 100%; height: 100%; }
 """
 
@@ -127,14 +132,23 @@ def _notas_html(notas: list[tuple[int, str]],
     return "\n".join(blocos)
 
 
-def chapter_fragment(chapter: Chapter) -> str:
+def _figura_html(figura, nome: str) -> str:
+    """Marcacao de uma figura; `nome` e o caminho relativo dentro do EPUB."""
+    alt = _esc(figura.alt or "Figura do livro")
+    return (f'<figure class="figura"><img src="{_esc(nome)}" alt="{alt}"/>'
+            f'</figure>')
+
+
+def chapter_fragment(chapter: Chapter,
+                     figure_names: dict[int, str] | None = None) -> str:
     """Fragmento de corpo XHTML de um capitulo.
 
     O `ebooklib` envolve o fragmento no template dele (html/head/body e o link
     do CSS), entao aqui nao entram declaracao XML nem tags de documento. Uma
     continuacao nao emite cabecalho: o titulo ja apareceu na primeira parte e
     nao deve se repetir no meio da leitura. As notas de rodape do capitulo
-    entram como endnotes ao final do fragmento.
+    entram como endnotes ao final do fragmento. `figure_names` mapeia
+    `id(figura)` para o caminho da imagem dentro do EPUB.
     """
     notas = list(getattr(chapter, "notes", []) or [])
     notas_disponiveis = {n for n, _ in notas}
@@ -152,10 +166,25 @@ def chapter_fragment(chapter: Chapter) -> str:
                 Paragraph([Run(str(n), superscript=True) for n in title_refs]),
                 notas_disponiveis, refs_vistos)
         partes.append(f"<{tag}>{_esc(chapter.title)}{sufixo}</{tag}>")
+    # Figuras sao ancoradas ao paragrafo (after_paragraph); -1 = apos o titulo.
+    figuras_por_paragrafo: dict[int, list[str]] = {}
+    nomes = figure_names or {}
+    for figura in getattr(chapter, "figures", []) or []:
+        nome = nomes.get(id(figura))
+        if nome:
+            figuras_por_paragrafo.setdefault(figura.after_paragraph, []).append(
+                _figura_html(figura, nome))
+    partes.extend(figuras_por_paragrafo.get(-1, []))
     for i, paragrafo in enumerate(chapter.paragraphs):
         classe = ' class="noindent"' if i == 0 else ""
         corpo = _runs_html(paragrafo, notas_disponiveis, refs_vistos)
         partes.append(f"<p{classe}>{corpo}</p>")
+        partes.extend(figuras_por_paragrafo.get(i, []))
+    # Figuras com indice fora do intervalo (edicao removeu paragrafos) entram
+    # ao final, antes das notas: nenhuma imagem se perde.
+    for chave, html_figuras in figuras_por_paragrafo.items():
+        if chave >= len(chapter.paragraphs):
+            partes.extend(html_figuras)
     if notas:
         partes.append(_notas_html(notas, refs_vistos))
     return "\n".join(partes)
@@ -267,6 +296,26 @@ def _write_epub_file(chapters: list[Chapter], title: str, author: str,
                            media_type="text/css", content=KDP_CSS.encode())
     livro.add_item(estilo)
 
+    # Figuras: o mesmo arquivo pode aparecer em varios capitulos; o hash do
+    # conteudo evita duplicar bytes no ZIP. O mapeamento usa `id(figura)`
+    # porque a dataclass nao e hashable (carrega `bytes`).
+    figure_names: dict[int, str] = {}
+    adicionadas: dict[str, str] = {}
+    for capitulo in chapters:
+        for figura in getattr(capitulo, "figures", []) or []:
+            if not figura.data:
+                continue
+            digest = hashlib.sha1(figura.data).hexdigest()[:16]
+            ext = "png" if figura.ext.lower() == "png" else "jpg"
+            nome = f"images/{digest}.{ext}"
+            if nome not in adicionadas:
+                media = "image/png" if ext == "png" else "image/jpeg"
+                livro.add_item(epub.EpubItem(
+                    uid=f"fig_{digest}", file_name=nome, media_type=media,
+                    content=figura.data))
+                adicionadas[nome] = media
+            figure_names[id(figura)] = nome
+
     pagina_capa = None
     if cover:
         from .cover import build_cover_bytes
@@ -309,7 +358,7 @@ def _write_epub_file(chapters: list[Chapter], title: str, author: str,
         item = epub.EpubHtml(
             title=titulo_cap,
             file_name=f"cap{i}.xhtml",
-            content=chapter_fragment(capitulo),
+            content=chapter_fragment(capitulo, figure_names),
         )
         item.add_item(estilo)
         livro.add_item(item)

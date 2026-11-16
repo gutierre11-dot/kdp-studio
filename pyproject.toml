@@ -3,6 +3,7 @@ name = "kdp-studio"
 version = "1.0.0"
 description = "Converta PDFs em EPUB no padrão KDP e traduza obras inteiras para português brasileiro."
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = [
     "fastapi",
@@ -16,6 +17,20 @@ dependencies = [
     "pydantic",
     "lxml",
 ]
+keywords = ["epub", "kdp", "pdf", "traducao", "fastapi"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Text Processing :: Markup :: XML",
+]
+
+[project.urls]
+Homepage = "https://github.com/gutierre11-dot/kdp-studio"
+Repository = "https://github.com/gutierre11-dot/kdp-studio"
+Issues = "https://github.com/gutierre11-dot/kdp-studio/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -39,6 +39,10 @@ class JobStore:
         self._pool = ThreadPoolExecutor(
             max_workers=max(1, int(settings.job_workers)),
             thread_name_prefix="kdp-job")
+        self._last_prune = 0.0
+        # Estados que representam trabalho em andamento: nunca sao removidos
+        # pelo TTL/limite no meio da traducao (o usuario perderia o job).
+        self._ativos = ("translating",)
 
     # -- ciclo de vida -----------------------------------------------------
     def create(self, *, title: str, author: str, language: str,
@@ -53,8 +57,20 @@ class JobStore:
         return job
 
     def get(self, job_id: str) -> JobState | None:
+        # A limpeza por TTL precisa acontecer mesmo sem upload novo; de outro
+        # modo jobs e EPUBs expirados ficariam acessiveis para sempre em
+        # `/download`. O throttle evita varrer o dicionario a cada poll de 800ms.
+        self.maybe_prune()
         with self._lock:
             return self._jobs.get(job_id)
+
+    def maybe_prune(self, intervalo: float = 30.0) -> None:
+        """Executa `prune` no maximo uma vez por `intervalo` segundos."""
+        agora = time.monotonic()
+        if agora - self._last_prune < intervalo:
+            return
+        self._last_prune = agora
+        self.prune()
 
     def update(self, job_id: str, **fields) -> None:
         with self._lock:
@@ -114,12 +130,17 @@ class JobStore:
         removidos: list[JobState] = []
         with self._lock:
             expirados = [jid for jid, job in self._jobs.items()
-                         if agora - job.created_at > self.settings.job_ttl_seconds]
+                         if job.status not in self._ativos
+                         and agora - job.created_at
+                         > self.settings.job_ttl_seconds]
             for jid in expirados:
                 removidos.append(self._jobs.pop(jid))
             excesso = len(self._jobs) - self.settings.job_max
             if excesso > 0:
-                mais_antigos = sorted(self._jobs.items(),
+                # Jobs em andamento ficam; o limite e aplicado aos concluidos.
+                candidatos = [(jid, job) for jid, job in self._jobs.items()
+                              if job.status not in self._ativos]
+                mais_antigos = sorted(candidatos,
                                       key=lambda kv: kv[1].created_at)
                 for jid, _ in mais_antigos[:excesso]:
                     removidos.append(self._jobs.pop(jid))
@@ -136,7 +157,9 @@ class JobStore:
             previa = capitulo.paragraphs[0].text[:200] if capitulo.paragraphs else ""
             vistas.append(ChapterView(index=i, title=capitulo.title,
                                       level=capitulo.level, words=capitulo.words,
-                                      preview=previa, notes_count=len(capitulo.notes)))
+                                      preview=previa,
+                                      notes_count=len(capitulo.notes),
+                                      figures_count=len(capitulo.figures)))
         return vistas
 
     def out_path_for(self, job: JobState, fmt: str) -> Path:

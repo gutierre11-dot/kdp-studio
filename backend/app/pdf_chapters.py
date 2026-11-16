@@ -10,10 +10,11 @@ import bisect
 import re
 import unicodedata
 from collections import Counter, defaultdict
+from dataclasses import replace
 from difflib import SequenceMatcher
 
-from .models import Anchor, Chapter, Line, Paragraph, Run
-from .pdf_extract import extract_lines
+from .models import Anchor, Chapter, Figure, Line, Paragraph, Run
+from .pdf_extract import extract_figures, extract_lines
 
 # Similaridade minima entre titulo do outline e texto da linha para ancorar.
 SIMILARITY_MIN = 0.72
@@ -586,8 +587,12 @@ def _runs_da_linha(linha: Line) -> list[Run]:
     limpos: list[Run] = []
     for run in origem:
         texto = re.sub(r"\s+", " ", (run.text or "").replace("\u00ad", ""))
-        limpos.append(Run(texto, italic=run.italic, bold=run.bold,
-                          superscript=run.superscript))
+        if run.href and texto.strip():
+            limpos.append(Run(texto, italic=run.italic, bold=run.bold,
+                              superscript=run.superscript, href=run.href))
+        else:
+            limpos.append(Run(texto, italic=run.italic, bold=run.bold,
+                              superscript=run.superscript))
     if limpos:
         limpos[0].text = limpos[0].text.lstrip()
         limpos[-1].text = limpos[-1].text.rstrip()
@@ -641,13 +646,12 @@ def _continua_paragrafo(prev: Line, cur: Line, largura_max: float) -> bool:
     return larga or prev.text.rstrip().endswith("-")
 
 
-def join_paragraphs(lines: list[Line]) -> list[Paragraph]:
-    """Transforma linhas em paragrafos, atravessando paginas.
+def join_paragraphs_com_inicios(
+        lines: list[Line]) -> tuple[list[Paragraph], list[int]]:
+    """Como `join_paragraphs`, mas tambem devolve o indice da linha inicial.
 
-    Uma linha continua a anterior quando tem a mesma fonte, esta logo abaixo e
-    ocupa quase toda a largura da coluna (sinal de que a frase continua). Na
-    virada de pagina a checagem de espaco vertical e ignorada, porque o gap
-    entre paginas nao tem significado.
+    O mapa `inicios[i]` permite ancorar figuras no paragrafo correto sem
+    reexecutar a juncao (que depende de geometria e seria O(n) extra).
     """
     larguras: dict[float, float] = {}
     for linha in lines:
@@ -655,8 +659,9 @@ def join_paragraphs(lines: list[Line]) -> list[Paragraph]:
         larguras[chave] = max(larguras.get(chave, 0.0), _largura(linha))
 
     paragrafos: list[Paragraph] = []
+    inicios: list[int] = []
     ultima: Line | None = None
-    for linha in lines:
+    for indice, linha in enumerate(lines):
         novas = _runs_da_linha(linha)
         if not novas:
             continue
@@ -671,8 +676,20 @@ def join_paragraphs(lines: list[Line]) -> list[Paragraph]:
                 _juntar_runs(paragrafos[-1].runs, novas, " ")
         else:
             paragrafos.append(Paragraph(runs=novas))
+            inicios.append(indice)
         ultima = linha
-    return paragrafos
+    return paragrafos, inicios
+
+
+def join_paragraphs(lines: list[Line]) -> list[Paragraph]:
+    """Transforma linhas em paragrafos, atravessando paginas.
+
+    Uma linha continua a anterior quando tem a mesma fonte, esta logo abaixo e
+    ocupa quase toda a largura da coluna (sinal de que a frase continua). Na
+    virada de pagina a checagem de espaco vertical e ignorada, porque o gap
+    entre paginas nao tem significado.
+    """
+    return join_paragraphs_com_inicios(lines)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -816,15 +833,58 @@ _MAX_NIVEL1 = 60
 _MAX_CHAPTER_WORDS = 15000
 
 
-def assemble_chapters(lines: list[Line], anchors: list[Anchor]) -> list[Chapter]:
+def _linha_de_insercao(figura: Figure, lines: list[Line]) -> int:
+    """Indice da primeira linha que vem depois da figura no fluxo de leitura."""
+    for i, linha in enumerate(lines):
+        if linha.page > figura.page:
+            return i
+        if (linha.page == figura.page
+                and float(linha.bbox[1]) >= float(figura.bbox[3]) - 0.5):
+            return i
+    return len(lines)
+
+
+def _posicionar_figuras(
+        figuras: list[tuple[int, Figure]], inicio_corpo: int,
+        inicios: list[int], total_paragrafos: int) -> list[Figure]:
+    """Converte a posicao na linha para o indice do paragrafo do capitulo."""
+    posicionadas: list[Figure] = []
+    for linha_insercao, figura in figuras:
+        local = linha_insercao - inicio_corpo
+        if local <= 0 or not inicios:
+            figura.after_paragraph = -1
+        else:
+            after = bisect.bisect_right(inicios, local) - 1
+            figura.after_paragraph = min(after, total_paragrafos - 1)
+        posicionadas.append(figura)
+    posicionadas.sort(key=lambda f: (f.after_paragraph, f.page, f.bbox[1]))
+    return posicionadas
+
+
+def assemble_chapters(lines: list[Line], anchors: list[Anchor],
+                      figures: list[Figure] | None = None) -> list[Chapter]:
     """Fatia o fluxo de linhas entre ancoras consecutivas.
 
-    A linha da ancora vira o titulo do capitulo e nao entra no corpo.
+    A linha da ancora vira o titulo do capitulo e nao entra no corpo. Figuras
+    extraidas do PDF sao anexadas ao capitulo e ao paragrafo correspondentes na
+    ordem de leitura.
     """
     if not anchors:
-        paragrafos = join_paragraphs(lines)
-        return [Chapter("Conteúdo", 1, paragrafos)] if paragrafos else []
+        paragrafos, inicios = join_paragraphs_com_inicios(lines)
+        posicionadas = _posicionar_figuras(
+            [( _linha_de_insercao(f, lines), f) for f in (figures or [])],
+            0, inicios, len(paragrafos))
+        return ([Chapter("Conteúdo", 1, paragrafos, figures=posicionadas)]
+                if paragrafos or posicionadas else [])
     ordem = sorted(anchors, key=lambda a: a[0])
+    indices_ancora = [a[0] for a in ordem]
+    atribuidas: dict[int, list[tuple[int, Figure]]] = defaultdict(list)
+    for figura in figures or []:
+        insercao = _linha_de_insercao(figura, lines)
+        pos = bisect.bisect_right(indices_ancora, insercao) - 1
+        pos = min(max(pos, 0), len(ordem) - 1)
+        atribuidas[pos].append((insercao, figura))
+
     capitulos: list[Chapter] = []
     for pos, (indice, nivel, titulo) in enumerate(ordem):
         fim = ordem[pos + 1][0] if pos + 1 < len(ordem) else len(lines)
@@ -833,9 +893,12 @@ def assemble_chapters(lines: list[Line], anchors: list[Anchor]) -> list[Chapter]
         # superscript numerico); ele nao entra no corpo, entao e coletado aqui.
         titulo_refs = (_refs_em_runs(lines[indice].runs)
                        if 0 <= indice < len(lines) else [])
+        paragrafos, inicios = join_paragraphs_com_inicios(corpo)
+        posicionadas = _posicionar_figuras(
+            atribuidas.get(pos, []), indice + 1, inicios, len(paragrafos))
         capitulos.append(Chapter(titulo, min(max(int(nivel), 1), 3),
-                                 join_paragraphs(corpo),
-                                 title_refs=titulo_refs))
+                                 paragrafos, title_refs=titulo_refs,
+                                 figures=posicionadas))
     return capitulos
 
 
@@ -849,7 +912,7 @@ def merge_empty_parents(chapters: list[Chapter]) -> list[Chapter]:
     saida: list[Chapter] = []
     pendentes: list[Chapter] = []
     for capitulo in chapters:
-        if not capitulo.paragraphs:
+        if not capitulo.paragraphs and not capitulo.figures:
             pendentes.append(capitulo)
             continue
         if pendentes and capitulo.level > pendentes[-1].level:
@@ -862,7 +925,8 @@ def merge_empty_parents(chapters: list[Chapter]) -> list[Chapter]:
                                  continues=capitulo.continues,
                                  notes=notes + list(capitulo.notes),
                                  title_refs=title_refs
-                                 + list(capitulo.title_refs)))
+                                 + list(capitulo.title_refs),
+                                 figures=list(capitulo.figures)))
         else:
             saida.extend(pendentes)
             saida.append(capitulo)
@@ -927,11 +991,25 @@ def _dividir_capitulos_longos(chapters: list[Chapter],
                 if numero in refs:
                     notas_por_grupo[indice].append((numero, texto))
         for indice, grupo in enumerate(grupos):
+            inicio = sum(len(g) for g in grupos[:indice])
+            fim = inicio + len(grupo)
+            figuras: list[Figure] = []
+            for figura in capitulo.figures:
+                after = figura.after_paragraph
+                if after < 0:
+                    if indice == 0:
+                        figuras.append(replace(figura))
+                    continue
+                if after >= fim and indice < len(grupos) - 1:
+                    continue
+                figuras.append(replace(
+                    figura, after_paragraph=min(after, fim - 1) - inicio))
             saida.append(Chapter(capitulo.title, capitulo.level, grupo,
                                  continues=indice > 0,
                                  notes=notas_por_grupo[indice],
                                  title_refs=(list(capitulo.title_refs)
-                                             if indice == 0 else [])))
+                                             if indice == 0 else []),
+                                 figures=figuras))
     return saida
 
 
@@ -943,12 +1021,23 @@ def _agrupar_ate(chapters: list[Chapter], limite: int) -> list[Chapter]:
     agrupados: list[Chapter] = []
     for i in range(0, len(chapters), passo):
         grupo = chapters[i:i + passo]
+        deslocamento = 0
+        figuras: list[Figure] = []
+        for capitulo in grupo:
+            for figura in capitulo.figures:
+                if figura.after_paragraph < 0:
+                    after = -1 if deslocamento == 0 else deslocamento - 1
+                else:
+                    after = deslocamento + figura.after_paragraph
+                figuras.append(replace(figura, after_paragraph=after))
+            deslocamento += len(capitulo.paragraphs)
         agrupados.append(Chapter(
             grupo[0].title,
             min(c.level for c in grupo),
             [p for c in grupo for p in c.paragraphs],
             notes=[n for c in grupo for n in c.notes],
             title_refs=[r for c in grupo for r in c.title_refs],
+            figures=figuras,
         ))
     return agrupados
 
@@ -963,8 +1052,8 @@ def sanitize(chapters: list[Chapter],
     titulo.
     """
     avisos: list[str] = []
-    vazios = [c for c in chapters if not c.paragraphs]
-    validos = [c for c in chapters if c.paragraphs]
+    vazios = [c for c in chapters if not c.paragraphs and not c.figures]
+    validos = [c for c in chapters if c.paragraphs or c.figures]
     if vazios:
         avisos.append(f"{len(vazios)} capítulo(s) sem conteúdo foram descartados.")
     if not validos:
@@ -990,6 +1079,7 @@ def build_chapters(pdf_path, *, remove_header: bool = True,
     body_size = modal_body_size(lines)
     anchors: list[Anchor] = []
     avisos: list[str] = []
+    figuras, avisos_figuras = extract_figures(pdf_path)
     toc_lines: set[int] = set()
     if outline:
         anchors = anchor_outline(lines, outline, body_size)
@@ -1037,8 +1127,16 @@ def build_chapters(pdf_path, *, remove_header: bool = True,
     corpo = [limpas[i] for i in indices_corpo]
     anchors_corpo: list[Anchor] = [(mapa_corpo[i], nivel, titulo)
                                    for i, nivel, titulo in anchors_limpos]
+    # Imagens da capa/ficha inicial nao entram no corpo: a capa do EPUB e
+    # propria e a ilustracao antes do primeiro titulo seria duplicada.
+    if anchors_limpos and figuras:
+        primeira = limpas[anchors_limpos[0][0]]
+        figuras = [f for f in figuras
+                   if not (f.page < primeira.page
+                           or (f.page == primeira.page
+                               and f.bbox[3] <= primeira.bbox[1]))]
 
-    capitulos = assemble_chapters(corpo, anchors_corpo)
+    capitulos = assemble_chapters(corpo, anchors_corpo, figuras)
     ordem_limpa = sorted(anchors_limpos, key=lambda a: a[0])
     refs_em_algum: set[int] = set()
     for pos, capitulo in enumerate(capitulos):
@@ -1062,4 +1160,4 @@ def build_chapters(pdf_path, *, remove_header: bool = True,
     capitulos = merge_empty_parents(capitulos)
     capitulos = _dividir_capitulos_longos(capitulos)
     capitulos, avisos_sanidade = sanitize(capitulos, pages)
-    return capitulos, avisos + avisos_sanidade
+    return capitulos, avisos + avisos_figuras + avisos_sanidade

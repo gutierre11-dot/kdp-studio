@@ -40,6 +40,9 @@
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
   }
+  function contarPalavras(texto) {
+    return String(texto || '').trim().split(/\s+/).filter(Boolean).length;
+  }
 
   /* ---------- HTTP ---------- */
   async function api(caminho, opcoes) {
@@ -56,6 +59,7 @@
   const estado = {
     arquivo: null, jobId: null, capitulos: [], timer: null, online: false,
     capa: null,   // metadados da capa efetiva ({kind, name, bytes})
+    editado: false,   // há edições locais ainda não exportadas
   };
 
   // Sem o nome amigável aqui, o selo de status mostraria o id cru do provider.
@@ -323,6 +327,8 @@
       // Texto corrigido no navegador e ainda não exportado (null = original).
       edit: null,
     }));
+    // Edições salvas no navegador para este job têm prioridade sobre o original.
+    const restaurados = restaurarEdicoes(estado.jobId, estado.capitulos);
     estado.capa = job.cover || null;
     const avisos = job.warnings || [];
     const caixa = $('#warn-box');
@@ -337,6 +343,10 @@
     atualizarCapa();
     irParaPasso(3);
     toast('Conversão concluída: ' + estado.capitulos.length + ' capítulos.', 'ok');
+    if (restaurados) {
+      toast('Edições restauradas do salvamento local: ' + restaurados +
+        (restaurados === 1 ? ' capítulo.' : ' capítulos.'), 'info');
+    }
   }
 
   function falhar(mensagem) {
@@ -620,7 +630,9 @@
       return;
     }
     cap.edit = limpos;
-    cap.words = limpos.join(' ').split(/\s+/).filter(Boolean).length;
+    cap.words = contarPalavras(limpos.join(' '));
+    estado.editado = true;
+    persistirEdicoes();
     leituraAtual.paragraphs = limpos.slice();
     definirModoLeitura(true);
     renderizarCapitulos();
@@ -647,6 +659,70 @@
     return edicoes;
   }
 
+  /* ---------- edições salvas no navegador ---------- */
+  const PREFIXO_EDICOES = 'kdp-studio:edits:';
+
+  function chaveEdicoes(jobId) {
+    return PREFIXO_EDICOES + jobId;
+  }
+
+  /** Lê as edições salvas do job; localStorage indisponível ou JSON inválido vira null. */
+  function lerEdicoes(jobId) {
+    if (!jobId) return null;
+    try {
+      const bruto = window.localStorage.getItem(chaveEdicoes(jobId));
+      if (!bruto) return null;
+      const dados = JSON.parse(bruto);
+      if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return null;
+      return dados;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Falhas do localStorage são silenciosas: a edição continua em memória. */
+  function gravarEdicoes(jobId, edicoes) {
+    if (!jobId) return;
+    try {
+      window.localStorage.setItem(chaveEdicoes(jobId), JSON.stringify(edicoes));
+    } catch (_) { /* modo privado, cota excedida etc. */ }
+  }
+
+  function limparEdicoes(jobId) {
+    if (!jobId) return;
+    try { window.localStorage.removeItem(chaveEdicoes(jobId)); } catch (_) { /* idem */ }
+  }
+
+  function persistirEdicoes() {
+    if (!estado.jobId) return;
+    gravarEdicoes(estado.jobId, coletarEdicoes());
+  }
+
+  /**
+   * Reaplica ao job recém-convertido as edições salvas para o mesmo id.
+   * Entradas inválidas ou de capítulos inexistentes são ignoradas em silêncio.
+   */
+  function restaurarEdicoes(jobId, capitulos) {
+    const salvas = lerEdicoes(jobId);
+    if (!salvas) return 0;
+    let restaurados = 0;
+    Object.keys(salvas).forEach(chave => {
+      if (!/^\d+$/.test(chave)) return;
+      const paragrafos = salvas[chave];
+      if (!Array.isArray(paragrafos) || !paragrafos.length) return;
+      if (!paragrafos.every(p => typeof p === 'string')) return;
+      const cap = capitulos.find(c => c.index === Number(chave));
+      if (!cap) return;
+      const textos = paragrafos.map(p => p.trim()).filter(Boolean);
+      if (!textos.length) return;
+      cap.edit = textos;
+      cap.words = contarPalavras(textos.join(' '));
+      restaurados += 1;
+    });
+    if (restaurados) estado.editado = true;
+    return restaurados;
+  }
+
   $('#btn-export').addEventListener('click', async () => {
     const incluidas = estado.capitulos.filter(c => c.included);
     if (!incluidas.length) { toast('Inclua ao menos um capítulo.', 'err'); return; }
@@ -662,6 +738,8 @@
         })
       });
       baixar(await resposta.blob(), slug(estado.titulo) + '.epub');
+      // A chave fica salva: o usuário pode reexportar sem perder as edições.
+      estado.editado = false;
       toast('EPUB validado e baixado.', 'ok');
     } catch (erro) {
       toast(erro.message, 'err');
@@ -672,6 +750,8 @@
 
   $('#btn-restart').addEventListener('click', () => {
     pararTimer();
+    limparEdicoes(estado.jobId);
+    estado.editado = false;
     estado.arquivo = null;
     estado.jobId = null;
     estado.capitulos = [];
@@ -747,6 +827,13 @@
     } catch (erro) {
       toast(erro.message, 'err');
     }
+  });
+
+  /* ---------- aviso ao sair com edições não exportadas ---------- */
+  window.addEventListener('beforeunload', event => {
+    if (!estado.editado) return;
+    event.preventDefault();
+    event.returnValue = '';
   });
 
   /* ---------- init ---------- */

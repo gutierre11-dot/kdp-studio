@@ -158,3 +158,16 @@ def detectar_capa(dados: bytes) -> str:
             "a capa não pôde ser lida como imagem (arquivo corrompido ou "
             "incompleto)") from exc
     return extensao
+
+
+def dimensoes_capa(dados: bytes) -> tuple[int, int]:
+    """Dimensoes reais (largura, altura) de uma capa ja validada."""
+    pix = pymupdf.Pixmap(dados)
+    return int(pix.width), int(pix.height)
+
+
+def proporcao_kdp_ok(largura: int, altura: int) -> bool:
+    """A KDP pede capa 1:1.6; tolera 3% de arredondamento do autor."""
+    if largura <= 0 or altura <= 0:
+        return False
+    return abs((largura / altura) / (1600 / 2560) - 1.0) <= 0.03

@@ -232,7 +232,8 @@ def test_capa_procedural_por_padrao(client, pdf_bytes):
     _estado(client, job_id)
 
     assert client.get(f"/api/jobs/{job_id}").json()["cover"] == {
-        "kind": "procedural", "name": None, "bytes": 0}
+        "kind": "procedural", "name": None, "bytes": 0,
+        "width": 1600, "height": 2560, "aspect_ok": True, "hint": ""}
 
     previa = client.get(f"/api/jobs/{job_id}/cover")
     assert previa.status_code == 200

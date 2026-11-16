@@ -206,7 +206,7 @@ kdp-studio/
 ├── static/{index.html,app.js,styles.css,vendor/tailwind.js}
 ├── tests/               # unitários, API e aceitação (sintética + PDFs reais)
 ├── configurar-ia.sh     # configuração interativa da chave de IA
-├── .github/workflows/   # CI: lint + testes em Python 3.10 e 3.13
+├── .github/workflows/   # CI: lint + testes + byte-compile em Python 3.10 e 3.13
 └── docs/superpowers/    # specs e plano (o que ficou obsoleto vai em archive/)
 ```
 
@@ -232,8 +232,9 @@ quando a variável não existe.
 A suíte nunca chama a API real: a fixture `offline` transforma qualquer criação
 de cliente de LLM em erro.
 
-O CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) roda lint e testes
-em Python 3.10 e 3.13 a cada push e pull request.
+O CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) roda lint, testes e
+byte-compile do backend em Python 3.10 e 3.13, além da sintaxe do frontend, a
+cada push e pull request.
 
 Smoke test:
 
